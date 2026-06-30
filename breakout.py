@@ -200,7 +200,7 @@ class Breakout(BaseEffect):
         'Metaballs',
         'Particle Storm',
         'Plasma',
-        'Prism Lattice',
+        'Wormhole',
         'Psychedelic',
         'Audio Sine',
         'Starfield',
