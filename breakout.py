@@ -189,7 +189,7 @@ class Breakout(BaseEffect):
 
     NAME = 'Breakout'
     AUTHOR = 'Copilot'
-    TAGS = ['games', 'arcade']
+    TAGS = ['games', 'arcade', 'groovy']
     PING_PONG_FRIENDS = [
         'Tron Grid',
         'Kaleidoscope',
