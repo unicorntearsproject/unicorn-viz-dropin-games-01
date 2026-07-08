@@ -49,7 +49,6 @@ uniform float iBass;
 uniform float iMid;
 uniform float iTreble;
 uniform float iScare;     // beat scare-mode envelope [0,1], 1 = just triggered
-uniform float iSeed;      // per-instance maze/ghost offset
 uniform float iSpeed;
 uniform float iIntensity;
 uniform float iZoomGain;
@@ -61,9 +60,10 @@ out vec4 fragColor;
 #define PI 3.14159265
 #define TAU 6.28318530
 
-float hash11(float n) { return fract(sin(n * 78.233 + iSeed) * 43758.5453); }
+
+float hash11(float n) { return fract(sin(n * 78.233) * 43758.5453); }
 float hash21(vec2 p) {
-    p = fract(p * vec2(123.34, 456.21) + iSeed);
+    p = fract(p * vec2(123.34, 456.21));
     p += dot(p, p + 45.32);
     return fract(p.x * p.y);
 }
@@ -198,7 +198,6 @@ class NeonPac(BaseEffect):
         p["iMid"].value = self._mid
         p["iTreble"].value = self._treble
         p["iScare"].value = self._scare
-        p["iSeed"].value = self.parameters["seed"]
         p["iSpeed"].value = self.parameters["speed"]
         p["iIntensity"].value = self.parameters["intensity"]
         p["iZoomGain"].value = self.parameters["zoom"]

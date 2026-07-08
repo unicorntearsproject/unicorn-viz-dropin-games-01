@@ -49,7 +49,6 @@ uniform float iBass;
 uniform float iMid;
 uniform float iTreble;
 uniform float iExplosion;  // beat explosion envelope [0,1], 1 = just triggered
-uniform float iSeed;       // per-instance enemy/wave offset
 uniform float iSpeed;
 uniform float iIntensity;
 uniform float iZoomGain;
@@ -61,12 +60,6 @@ out vec4 fragColor;
 #define PI 3.14159265
 #define TAU 6.28318530
 
-float hash11(float n) { return fract(sin(n * 78.233 + iSeed) * 43758.5453); }
-float hash21(vec2 p) {
-    p = fract(p * vec2(123.34, 456.21) + iSeed);
-    p += dot(p, p + 45.32);
-    return fract(p.x * p.y);
-}
 
 vec3 hsvtorgb(float h, float s, float v) {
     vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
@@ -209,7 +202,6 @@ class Galaga(BaseEffect):
         p["iMid"].value = self._mid
         p["iTreble"].value = self._treble
         p["iExplosion"].value = self._explosion
-        p["iSeed"].value = self.parameters["seed"]
         p["iSpeed"].value = self.parameters["speed"]
         p["iIntensity"].value = self.parameters["intensity"]
         p["iZoomGain"].value = self.parameters["zoom"]
