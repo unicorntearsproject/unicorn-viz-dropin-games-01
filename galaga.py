@@ -157,7 +157,8 @@ vec3 backdrop(vec2 uv, float A, float t) {
 }
 
 // A neon invader bug in cell-local space (q ~ [-0.5,0.5], y up).
-vec3 drawInvader(vec2 q, vec3 c, float hp, float anim) {
+vec3 drawInvader(vec2 q, vec3 c, float hp, float anim, float pulse) {
+    q /= (1.0 + pulse * 0.12);                          // swell with the music
     float boss = step(1.5, hp);
     float s = mix(0.30, 0.37, boss);
     vec2 bb = abs(q) - vec2(s, s * 0.60);
@@ -180,31 +181,60 @@ vec3 drawInvader(vec2 q, vec3 c, float hp, float anim) {
         legs += smoothstep(0.03, 0.0, length(q - vec2(float(k) * 0.11, ly)));
     }
     o += base * legs * 0.7;
-    o += base * m * 0.35;                                            // fill glow
-    o += base * smoothstep(s * 1.7, 0.0, length(q)) * 0.15;          // aura
+    o += base * m * (0.35 + pulse * 0.5);                            // glow pulses
+    o += base * smoothstep(s * 1.7, 0.0, length(q)) * (0.15 + pulse * 0.35);  // aura
     o += vec3(1.0, 0.9, 0.4) * boss
        * smoothstep(0.04, 0.0, abs(length(q) - s * 1.15)) * 0.5;     // boss crown
     return o;
 }
 
-// The player fighter in local space (q ~ [-1,1], y up).
-vec3 drawShip(vec2 q, float t, float thrust) {
-    float dtri = abs(q.x) - 0.52 * (0.9 - q.y);
-    float body = smoothstep(0.04, -0.03, dtri)
-               * smoothstep(-0.55, -0.48, q.y) * smoothstep(0.92, 0.85, q.y);
-    float wings = smoothstep(0.05, -0.03, abs(q.y + 0.18) - 0.10)
-                * smoothstep(0.03, -0.03, abs(q.x) - 0.9);
-    float ship = clamp(body + wings, 0.0, 1.0);
-    vec3 hull = mix(vec3(0.15, 0.85, 1.0), vec3(0.6, 1.0, 0.95),
-                    clamp(q.y * 0.5 + 0.5, 0.0, 1.0));
-    vec3 o = hull * ship;
-    o = mix(o, vec3(1.0, 0.9, 0.4), smoothstep(0.13, 0.0, length(q - vec2(0.0, 0.22))));
-    o += vec3(1.0) * smoothstep(0.09, 0.0, length(q - vec2(-0.12, 0.35))) * ship * 0.6;
-    float plume = smoothstep(0.18, 0.42, q.y) * smoothstep(1.35, 0.55, q.y);   // below ship
-    float fl = smoothstep(0.22, 0.0, abs(q.x)) * plume
-             * (0.6 + 0.4 * sin(t * 40.0) + thrust);
-    o += mix(vec3(1.0, 0.5, 0.1), vec3(0.4, 0.8, 1.0), 0.5 + 0.5 * sin(t * 30.0)) * max(fl, 0.0);
-    o += hull * ship * 0.35;                                         // rim glow
+// The player fighter in local space (q ~ [-1,1], y up, nose pointing +y).
+vec3 drawShip(vec2 q, float t, float thrust, float pulse) {
+    q /= (1.0 + pulse * 0.14);                          // breathes with the beat
+    vec2 aq = vec2(abs(q.x), q.y);
+    // sleek fuselage: a vertical lens pointed at nose and tail
+    float prof = sin(clamp((q.y + 0.62) / 1.55, 0.0, 1.0) * PI);
+    float fus = smoothstep(0.035, -0.02, abs(q.x) - 0.28 * prof);
+    // bold swept-back delta wings
+    vec2 wq = rot(0.72) * (aq - vec2(0.30, -0.16));
+    float wing = smoothstep(0.04, -0.02, max(abs(wq.x) - 0.46, abs(wq.y) - 0.075));
+    float hull = clamp(fus + wing, 0.0, 1.0);
+    vec3 body = mix(vec3(0.06, 0.45, 0.95), vec3(0.8, 1.0, 1.0),
+                    clamp(q.y * 0.55 + 0.5, 0.0, 1.0));
+    vec3 o = body * hull * (1.2 + pulse * 0.7);
+    // neon edge outline along the fuselage + wing silhouette
+    float edge = smoothstep(0.032, 0.0, abs(abs(q.x) - 0.28 * prof)) * step(0.06, prof)
+               + smoothstep(0.03, 0.0, abs(max(abs(wq.x) - 0.46, abs(wq.y) - 0.075)));
+    o += vec3(0.4, 1.0, 1.0) * clamp(edge, 0.0, 1.0) * (0.5 + pulse * 0.4);
+    // cockpit canopy
+    o = mix(o, vec3(1.0, 0.95, 0.45), smoothstep(0.12, 0.0, length((q - vec2(0.0, 0.28)) * vec2(1.4, 1.0))));
+    o += vec3(1.0) * smoothstep(0.045, 0.0, length(q - vec2(-0.04, 0.40))) * 0.9;          // spec
+    float fx = abs(abs(q.x) - 0.11);                    // twin engine plumes below the tail
+    float plume = smoothstep(0.085, 0.0, fx) * smoothstep(-0.5, -0.66, q.y)
+                * smoothstep(-1.4, -0.72, q.y) * (0.6 + 0.4 * sin(t * 45.0) + thrust + pulse * 0.6);
+    o += mix(vec3(1.0, 0.5, 0.1), vec3(0.3, 0.9, 1.0), 0.5 + 0.5 * sin(t * 30.0)) * max(plume, 0.0);
+    o += body * hull * smoothstep(0.95, 0.0, length(q)) * (0.2 + pulse * 0.45);            // aura
+    return o;
+}
+
+// The bonus mystery saucer in world space around centre c.
+vec3 drawUFO(vec2 p, vec2 c, float t, float pulse) {
+    vec2 e = (p - c) / (1.0 + pulse * 0.14);
+    float disc = 1.0 - smoothstep(-0.012, 0.012, length(e / vec2(0.14, 0.045)) - 1.0);
+    float dome = (1.0 - smoothstep(-0.012, 0.012,
+                  length((e - vec2(0.0, 0.015)) / vec2(0.062, 0.07)) - 1.0)) * step(0.0, e.y);
+    vec3 metal = mix(vec3(0.22, 0.28, 0.42), vec3(0.85, 0.92, 1.0),
+                     clamp(e.y * 9.0 + 0.5, 0.0, 1.0));
+    vec3 domecol = 0.5 + 0.5 * cos(vec3(0.0, 2.0, 4.0) + t * 3.0);
+    vec3 o = metal * disc;
+    o = mix(o, domecol, dome * 0.9);
+    o += vec3(1.0) * smoothstep(0.028, 0.0, length(e - vec2(-0.045, 0.03))) * 0.6;   // spec
+    for (int k = -3; k <= 3; k++) {                     // blinking rim lights
+        vec3 lc = 0.5 + 0.5 * cos(vec3(0.0, 2.1, 4.2) + t * 8.0 + float(k) * 1.1);
+        o += lc * smoothstep(0.010, 0.0, length(e - vec2(float(k) * 0.037, -0.008)))
+           * disc * (0.8 + pulse);
+    }
+    o += vec3(0.5, 0.9, 1.0) * smoothstep(0.18, 0.0, length(e * vec2(1.0, 2.6))) * (0.12 + pulse * 0.3);
     return o;
 }
 
@@ -238,6 +268,7 @@ void main() {
     float t = iTime;
 
     vec3 col = backdrop(v_uv, A, t);
+    float pulse = clamp(iBass * 0.7 + iBeat * 0.6, 0.0, 1.3);
 
     // ---- enemy formation (O(1) grid lookup, Breakout-style) ----
     float fcx = (p.x - iFormX) / iSX + (iGrid.x - 1.0) * 0.5;
@@ -248,7 +279,7 @@ void main() {
         float hp = texelFetch(iEnemy, ivec2(cc, rr), 0).r * MAXHP;
         if (hp > 0.5) {
             vec2 q = vec2(fcx - float(cc), -(fcy - float(rr)));
-            col += drawInvader(q, iRowCol[rr], hp, iAnim) * (1.0 + iMid * 0.4);
+            col += drawInvader(q, iRowCol[rr], hp, iAnim, pulse) * (1.0 + iMid * 0.4);
         }
     }
 
@@ -256,16 +287,14 @@ void main() {
     for (int i = 0; i < 2; i++) {
         if (iDiver[i].x > 900.0) continue;
         vec2 q = rot(iDiverAng[i]) * ((p - iDiver[i]) / iSX);
-        q.y = -q.y;
-        col += drawInvader(q, vec3(1.0, 0.35, 0.2), 1.0, iAnim);
+        col += drawInvader(q, vec3(1.0, 0.35, 0.2), 1.0, iAnim, pulse);
     }
 
     // ---- player ship ----
     {
         float vis = (iPlayerHit > 0.5) ? step(0.5, fract(t * 12.0)) : 1.0;
         vec2 q = (p - vec2(iPlayerX, iPlayerY)) / 0.14;
-        q.y = -q.y;
-        col += drawShip(q, t, iThrust) * vis;
+        col += drawShip(q, t, iThrust, pulse) * vis;
     }
 
     // ---- bullets ----
@@ -276,17 +305,7 @@ void main() {
     for (int i = 0; i < 6; i++) col += drawExpl(p, iExpl[i]);
 
     // ---- bonus mystery saucer ----
-    if (iMystery.x < 900.0) {
-        vec2 e = (p - iMystery) * vec2(1.0, -1.0);
-        float disc = 1.0 - smoothstep(-0.02, 0.02, length(e / vec2(0.12, 0.05)) - 1.0);
-        float dome = (1.0 - smoothstep(-0.02, 0.02,
-                      length((e - vec2(0.0, 0.02)) / vec2(0.055, 0.06)) - 1.0)) * step(0.0, e.y);
-        col = mix(col, vec3(0.8, 0.9, 1.0), clamp(disc + dome, 0.0, 1.0));
-        for (int k = -2; k <= 2; k++) {
-            vec3 lc = 0.5 + 0.5 * cos(vec3(0.0, 2.1, 4.2) + t * 8.0 + float(k) * 1.3);
-            col += lc * smoothstep(0.012, 0.0, length(e - vec2(float(k) * 0.045, -0.01))) * disc;
-        }
-    }
+    if (iMystery.x < 900.0) col += drawUFO(p, iMystery, t, pulse);
 
     // ---- neon post ----
     col += palette(iHue + 0.5) * iFlash * 0.18;
