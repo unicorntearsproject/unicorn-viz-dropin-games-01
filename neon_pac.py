@@ -5,9 +5,11 @@ game** on the CPU (the same architecture that makes :class:`Breakout` feel
 like Breakout) and lets a GLSL shader render the true game state as glowing
 neon:
 
-* An authentic 28×31 maze (walls / dots / power-pellets / tunnels) stored as a
-  grid and uploaded to the shader as textures — exactly like Breakout's brick
-  matrix.
+* **Seven 28×31 boards** that swap at random every 15–30 s (or early when Pac
+  clears one): the authentic maze, two traditional block mazes, and four
+  unexpected layouts (open pillar arena, concentric rings, diagonal lattice,
+  big chambers).  Walls upload to the shader as textures like Breakout's brick
+  matrix; dots auto-fill every reachable cell so any layout is playable.
 * A self-playing Pac-Man that navigates corridors, seeks dots, flees ghosts,
   and hunts them while powered up — drawn as the iconic chomping yellow wedge
   whose mouth points in its direction of travel.
@@ -16,35 +18,44 @@ neon:
   scatter/chase cycling and a frightened (blue, fleeing) mode triggered by
   power-pellets.  Rendered as the unmistakable ghost silhouette with
   directional eyes.
+* A rare **alien-invasion skin** (default ~12 % per board, and can strike at
+  startup): Pac becomes a blinking flying saucer and the ghosts become little
+  grey aliens with big slanted almond eyes — same game, cosmetic swap only.
 
-Everything is dripping in neon / glitter: blue outlined maze conduits, bloom,
-beat-synced flashes, treble sparkle-glitter on the pellets, and chromatic
-vignette pulses.
+The whole board floats in a spinning, pulsating plasma cloud with a twinkling
+starfield and streaking comets, and everything drips neon / glitter: glossy
+sprites with specular highlights and sparkle glints, bloom, beat-synced pulses.
 
 Audio reactivity (all bands wired):
-  - bass    → game tempo, Pac/pellet swell, maze glow
+  - bass    → game tempo, plasma swell, Pac/pellet swell, maze glow
   - mid     → ghost glow, palette shimmer
-  - treble  → pellet sparkle-glitter
-  - beat    → global flash, palette shift, brief speed surge
+  - treble  → pellet + star sparkle-glitter
+  - beat    → plasma heart, palette shift, brief speed surge
 
-Randomised per activation: palette base hue, Pac + ghost spawn cells (nearest
-passable to randomised anchors), scatter phase, and ``self.time`` — no two
-runs look or play alike from frame 0.  Live tweakables: speed, reactivity,
-glitter.
+Randomised per activation: starting board, alien-mode roll, palette hue,
+spawn cells, scatter phase, and ``self.time`` — no two runs look or play alike
+from frame 0.  Config: ``board_min_s``, ``board_max_s``, ``ufo_chance``.  Live
+tweakables: speed, reactivity, glitter.
 """
 from __future__ import annotations
 
 import math
+
+from collections import deque
 
 import moderngl
 import numpy as np
 
 from unicornviz.effects.base import AudioData, BaseEffect
 
-# Authentic Pac-Man board: 28 columns × 31 rows.
+# All boards share these dimensions so the wall/dot textures can be reused.
+_W = 28
+_H = 31
+
+# Board 0 — the authentic Pac-Man board (hand-placed dots).
 #   '#' wall   '.' dot   'o' power-pellet   '=' ghost-house gate (impassable)
 #   ' ' open path with no pellet (ghost house interior / tunnel mouths)
-_MAZE = [
+_BOARD_CLASSIC = [
     "############################",
     "#............##............#",
     "#.####.#####.##.#####.####.#",
@@ -77,6 +88,91 @@ _MAZE = [
     "#..........................#",
     "############################",
 ]
+
+
+# --- Alternate boards, generated so dimensions/connectivity are guaranteed. ---
+# Each returns an (H, W) float32 wall grid (1.0 = wall).  Dots are auto-filled
+# on the reachable path cells at load time, so these only need to define walls.
+
+def _frame() -> np.ndarray:
+    """A bordered, otherwise-open board."""
+    g = np.ones((_H, _W), dtype=np.float32)
+    g[1:_H - 1, 1:_W - 1] = 0.0
+    return g
+
+
+def _gen_brick() -> np.ndarray:
+    """Traditional maze feel: staggered horizontal brick walls with loops."""
+    g = _frame()
+    for i, r in enumerate(range(3, _H - 2, 3)):
+        off = 0 if i % 2 == 0 else 4
+        for c in range(2 + off, _W - 3, 8):
+            g[r, c:min(c + 5, _W - 2)] = 1.0
+    return g
+
+
+def _gen_blocks() -> np.ndarray:
+    """City-grid of rectangular blocks separated by 1–2 wide corridors."""
+    g = _frame()
+    for r in range(2, _H - 3, 4):
+        for c in range(2, _W - 3, 5):
+            g[r:r + 2, c:c + 3] = 1.0
+    return g
+
+
+def _gen_pillars() -> np.ndarray:
+    """Wide-open arena studded with single-cell pillars — very un-Pac-Man."""
+    g = _frame()
+    for r in range(3, _H - 2, 3):
+        for c in range(3, _W - 2, 3):
+            g[r, c] = 1.0
+    return g
+
+
+def _gen_rings() -> np.ndarray:
+    """Concentric rectangular rings joined by a central vertical corridor."""
+    g = _frame()
+    cmid = _W // 2
+    k = 2
+    while (_H - 1 - k) - k >= 3 and (_W - 1 - k) - k >= 3:
+        r0, r1, c0, c1 = k, _H - 1 - k, k, _W - 1 - k
+        g[r0, c0:c1 + 1] = 1.0
+        g[r1, c0:c1 + 1] = 1.0
+        g[r0:r1 + 1, c0] = 1.0
+        g[r0:r1 + 1, c1] = 1.0
+        g[r0, cmid] = 0.0                       # doorways keep every ring linked
+        g[r1, cmid] = 0.0
+        k += 3
+    return g
+
+
+def _gen_lattice() -> np.ndarray:
+    """Open field textured by diagonal stripes of pillars."""
+    g = _frame()
+    for r in range(1, _H - 1):
+        for c in range(1, _W - 1):
+            if (r * 2 + c) % 5 == 0:
+                g[r, c] = 1.0
+    return g
+
+
+def _gen_chambers() -> np.ndarray:
+    """A few big rooms linked by cross corridors — spacious and unexpected."""
+    g = np.ones((_H, _W), dtype=np.float32)
+    for rr, cc, hh, ww in [(2, 2, 11, 10), (2, 16, 11, 10),
+                           (15, 2, 13, 10), (15, 16, 13, 10), (9, 10, 8, 8)]:
+        g[rr:rr + hh, cc:cc + ww] = 0.0
+    g[7, 1:_W - 1] = 0.0
+    g[20, 1:_W - 1] = 0.0
+    for c in (6, 13, 21):
+        g[1:_H - 1, c] = 0.0
+    return g
+
+
+# Board roster: index 0 is the authentic maze; 1–2 read traditional; 3–6 are the
+# unexpected ones.  A rare UFO/alien skin can overlay any of them.
+_BOARD_GENERATORS = (_gen_brick, _gen_blocks, _gen_pillars,
+                     _gen_rings, _gen_lattice, _gen_chambers)
 
 # Movement directions in (dcol, drow); row increases downward.
 _UP = (0, -1)
@@ -156,6 +252,7 @@ uniform float iFlash;        // white eat/beat flash
 uniform float iDeath;        // red caught flash
 uniform float iHue;          // palette base
 uniform float iGlitter;
+uniform float iUfo;          // >0.5 => alien-invasion skin (UFO + grey aliens)
 uniform vec2  iPacPos;       // grid coords
 uniform vec2  iPacDir;
 uniform float iPacMouth;     // 0 closed .. 1 open
@@ -289,35 +386,82 @@ void main() {
         }
     }
 
-    // ---- Pac-Man: glossy chomping wedge with sparkle bling ----
+    // ---- Pac-Man (or a UFO in alien mode) ----
     {
         vec2 pq = gc - iPacPos;
-        float dist = length(pq);
-        float r = 0.42 + iBass * 0.06;
-        vec2 dir = (length(iPacDir) > 0.01) ? normalize(iPacDir) : vec2(1.0, 0.0);
-        float rel = abs(mod(atan(pq.y, pq.x) - atan(dir.y, dir.x) + PI, TAU) - PI);
-        float mouthHalf = iPacMouth * 0.9;
-        float body = smoothstep(0.05, -0.02, dist - r);
-        float mouth = smoothstep(mouthHalf + 0.06, mouthHalf - 0.06, rel);
-        float pac = body * (1.0 - mouth);
-        vec3 py = mix(vec3(1.0, 0.82, 0.02), vec3(1.0, 1.0, 0.55), iPacPower);
-        vec3 shaded = py * (0.55 + 0.55 * (1.0 - dist / r));           // spherical shade
-        col = mix(col, shaded, pac);
-        col += vec3(1.0) * smoothstep(0.13, 0.0, length(pq - vec2(-0.14, 0.15))) * pac;  // spec
-        for (int k = 0; k < 2; k++) {                     // rotating sparkle glints
-            float ka = t * 3.0 + float(k) * PI;
-            float sd = length(pq - vec2(cos(ka), sin(ka)) * r * 0.55);
-            col += vec3(1.0, 1.0, 0.9) * smoothstep(0.05, 0.0, sd) * pac;
+        if (iUfo > 0.5) {                                 // flying saucer
+            vec2 e = vec2(pq.x, -pq.y);
+            float disc = 1.0 - smoothstep(-0.03, 0.03, length(e / vec2(0.5, 0.18)) - 1.0);
+            float dome = (1.0 - smoothstep(-0.03, 0.03,
+                          length((e - vec2(0.0, 0.05)) / vec2(0.24, 0.26)) - 1.0))
+                         * step(0.0, e.y);
+            float ufo = clamp(disc + dome, 0.0, 1.0);
+            vec3 metal = mix(vec3(0.30, 0.40, 0.55), vec3(0.85, 0.92, 1.0),
+                             clamp(e.y * 1.6 + 0.4, 0.0, 1.0));
+            vec3 domecol = mix(vec3(0.4, 1.0, 0.9), vec3(0.3, 0.7, 1.0),
+                               0.5 + 0.5 * sin(t * 3.0));
+            vec3 ucol = mix(metal, domecol, dome * 0.75);
+            col = mix(col, ucol, ufo);
+            col += vec3(1.0) * smoothstep(0.09, 0.0, length(e - vec2(-0.10, 0.13))) * ufo * 0.7;
+            for (int k = -2; k <= 2; k++) {               // blinking rim lights
+                vec2 lp = vec2(float(k) * 0.19, -0.015);
+                vec3 lc = 0.5 + 0.5 * cos(vec3(0.0, 2.1, 4.2) + t * 6.0 + float(k) * 1.3);
+                col += lc * smoothstep(0.04, 0.0, length(e - lp)) * disc * (0.7 + iBeat * 0.7);
+            }
+            float beam = smoothstep(0.45, 0.0, abs(e.x))
+                       * smoothstep(0.0, -0.7, e.y) * (0.10 + iBass * 0.15);
+            col += vec3(0.4, 1.0, 0.7) * beam;            // tractor beam
+            col += ucol * smoothstep(0.95, 0.45, length(e)) * 0.12;  // aura
+        } else {                                          // classic chomping wedge
+            float dist = length(pq);
+            float r = 0.42 + iBass * 0.06;
+            vec2 dir = (length(iPacDir) > 0.01) ? normalize(iPacDir) : vec2(1.0, 0.0);
+            float rel = abs(mod(atan(pq.y, pq.x) - atan(dir.y, dir.x) + PI, TAU) - PI);
+            float mouthHalf = iPacMouth * 0.9;
+            float body = smoothstep(0.05, -0.02, dist - r);
+            float mouth = smoothstep(mouthHalf + 0.06, mouthHalf - 0.06, rel);
+            float pac = body * (1.0 - mouth);
+            vec3 py = mix(vec3(1.0, 0.82, 0.02), vec3(1.0, 1.0, 0.55), iPacPower);
+            vec3 shaded = py * (0.55 + 0.55 * (1.0 - dist / r));       // spherical shade
+            col = mix(col, shaded, pac);
+            col += vec3(1.0) * smoothstep(0.13, 0.0, length(pq - vec2(-0.14, 0.15))) * pac;
+            for (int k = 0; k < 2; k++) {                 // rotating sparkle glints
+                float ka = t * 3.0 + float(k) * PI;
+                float sd = length(pq - vec2(cos(ka), sin(ka)) * r * 0.55);
+                col += vec3(1.0, 1.0, 0.9) * smoothstep(0.05, 0.0, sd) * pac;
+            }
+            col += py * smoothstep(r * 2.0, r * 0.7, dist) * (0.25 + iBeat * 0.55);  // aura
         }
-        col += py * smoothstep(r * 2.0, r * 0.7, dist) * (0.25 + iBeat * 0.55);  // aura
     }
 
-    // ---- ghosts: glossy silhouette, glowing eyes, animated skirt ----
+    // ---- ghosts (or grey aliens in UFO mode) ----
     for (int i = 0; i < 4; i++) {
         if (iGhostMode[i] < -0.5) continue;
         vec2 e = gc - iGhostPos[i];
         e.y = -e.y;                                       // flip so dome is up
+        bool fright0 = iGhostMode[i] > 0.5;
+        bool blink0  = iGhostMode[i] > 1.5;
         col += iGhostCol[i] * smoothstep(0.72, 0.4, length(e)) * 0.12;   // outer aura
+
+        if (iUfo > 0.5) {                                 // little grey alien head
+            float hw = 0.30 * (0.55 + 0.45 * clamp(e.y + 0.5, 0.0, 1.0));  // narrow chin
+            float head = 1.0 - smoothstep(-0.03, 0.03, length(e / vec2(hw, 0.42)) - 1.0);
+            if (head <= 0.0) continue;
+            vec3 grey = mix(vec3(0.42, 0.52, 0.45), vec3(0.78, 0.86, 0.78),
+                            clamp(e.y * 1.2 + 0.5, 0.0, 1.0));
+            if (fright0) grey = mix(grey, vec3(0.4, 0.5, 1.0), blink0 ? 0.85 : 0.6);
+            col = mix(col, grey, head);
+            col += vec3(1.0) * smoothstep(0.09, 0.0, length(e - vec2(-0.09, 0.22))) * head * 0.6;
+            for (int s = -1; s <= 1; s += 2) {            // big slanted almond eyes
+                vec2 le = rot(float(s) * 0.5) * (e - vec2(float(s) * 0.11, -0.02));
+                float eye = 1.0 - smoothstep(-0.02, 0.02, length(le / vec2(0.055, 0.12)) - 1.0);
+                col = mix(col, vec3(0.02, 0.02, 0.04), eye * head);
+                col += vec3(0.6, 1.0, 0.8)
+                     * smoothstep(0.02, 0.0, length(le - vec2(0.0, 0.05))) * eye * head * 0.8;
+            }
+            continue;
+        }
+
         float d = length(vec2(e.x, max(e.y, 0.0))) - 0.40;
         float skirt = -0.34 + 0.07 * abs(sin(e.x * 11.0 + t * 3.0));     // wobbling skirt
         float m = smoothstep(0.03, -0.02, d) * smoothstep(-0.02, 0.02, e.y - skirt);
@@ -398,49 +542,37 @@ class NeonPac(BaseEffect):
         self._prog = self._make_program(_VERT, _FRAG)
         self._vao, self._vbo = self._fullscreen_quad(self._prog)
 
-        # --- parse maze into wall + dot grids -------------------------------
-        self._H = len(_MAZE)
-        self._W = len(_MAZE[0])
-        wall = np.zeros((self._H, self._W), dtype=np.float32)
-        dots0 = np.zeros((self._H, self._W), dtype=np.float32)
-        passable = np.zeros((self._H, self._W), dtype=bool)
-        for r, line in enumerate(_MAZE):
-            for c, ch in enumerate(line):
-                if ch == '#' or ch == '=':
-                    wall[r, c] = 1.0
-                else:
-                    passable[r, c] = True
-                    if ch == '.':
-                        dots0[r, c] = 0.5
-                    elif ch == 'o':
-                        dots0[r, c] = 1.0
-        self._wall = wall
-        self._passable = passable
-        self._dots0 = dots0
-        self._dots = dots0.copy()
-        self._dot_total = float((dots0 > 0.0).sum())
+        self._W = _W
+        self._H = _H
+        self._board_min = float(self.config.get('board_min_s', 15.0))
+        self._board_max = float(self.config.get('board_max_s', 30.0))
+        self._ufo_chance = float(self.config.get('ufo_chance', 0.12))
 
-        self._wall_tex = self.ctx.texture((self._W, self._H), 1, dtype='f4')
+        # Build the 7-board roster: classic (hand-placed dots) + generated.
+        self._boards: list[dict] = []
+        cw = np.zeros((_H, _W), dtype=np.float32)
+        cd = np.zeros((_H, _W), dtype=np.float32)
+        for r, line in enumerate(_BOARD_CLASSIC):
+            for c, ch in enumerate(line):
+                if ch in ('#', '='):
+                    cw[r, c] = 1.0
+                elif ch == '.':
+                    cd[r, c] = 0.5
+                elif ch == 'o':
+                    cd[r, c] = 1.0
+        self._boards.append({'wall': cw, 'dots': cd})
+        for gen in _BOARD_GENERATORS:
+            self._boards.append({'wall': gen(), 'dots': None})
+        for b in self._boards:
+            assert b['wall'].shape == (_H, _W)
+
+        self._wall_tex = self.ctx.texture((_W, _H), 1, dtype='f4')
         self._wall_tex.filter = (moderngl.NEAREST, moderngl.NEAREST)
-        self._wall_tex.write(wall.tobytes())
-        self._dot_tex = self.ctx.texture((self._W, self._H), 1, dtype='f4')
+        self._dot_tex = self.ctx.texture((_W, _H), 1, dtype='f4')
         self._dot_tex.filter = (moderngl.NEAREST, moderngl.NEAREST)
         self._dot_dirty = True
 
-        # --- spawn entities at randomised (but valid) cells -----------------
-        jx = int(self.rng.integers(-2, 3))
-        self._pac = _Ent(*self._nearest_passable(self._W // 2 + jx, self._H - 6))
-        anchors = [(2, 2), (self._W - 3, 2), (2, self._H - 3), (self._W - 3, self._H - 3)]
-        self.rng.shuffle(anchors)
-        homes = [(self._W - 2, 1), (1, 1), (self._W - 2, self._H - 2), (1, self._H - 2)]
-        self._ghosts: list[_Ent] = []
-        for pers in range(4):
-            c, r = self._nearest_passable(*anchors[pers])
-            g = _Ent(c, r, pers)
-            g.home = homes[pers]
-            self._ghosts.append(g)
-
-        # --- audio + game state (must precede first direction pick) ----------
+        # --- audio + game state (must precede first board load) --------------
         self._bass = self._mid = self._treble = 0.0
         self._beat = 0.0
         self._flash = 0.0
@@ -452,10 +584,93 @@ class NeonPac(BaseEffect):
         self._scatter = True
         self._level_timer = 0.0
         self._freeze = 0.0
+        self._ufo = 0.0
+        self._board_timer = float(self.rng.uniform(self._board_min, self._board_max))
 
+        # Placeholders so _load_board can populate them.
+        self._wall = self._boards[0]['wall']
+        self._passable = self._wall < 0.5
+        self._reachable: set[tuple[int, int]] = set()
+        self._pac = _Ent(1, 1)
+        self._ghosts: list[_Ent] = []
+        self._dots = np.zeros((_H, _W), dtype=np.float32)
+        self._dot_total = 1.0
+
+        self._board_idx = int(self.rng.integers(0, len(self._boards)))
+        self._load_board(self._board_idx)
+
+    # ---------------------------------------------------------------- boards
+    def _bfs(self, c0: int, r0: int) -> set[tuple[int, int]]:
+        """All path cells reachable from ``(c0, r0)`` (tunnel wrap included)."""
+        seen = {(c0, r0)}
+        q = deque([(c0, r0)])
+        while q:
+            c, r = q.popleft()
+            for dc, dr in _DIRS:
+                nc, nr = self._wrap(c + dc, r + dr)
+                if self._passable[nr, nc] and (nc, nr) not in seen:
+                    seen.add((nc, nr))
+                    q.append((nc, nr))
+        return seen
+
+    @staticmethod
+    def _nearest_in(cells: set[tuple[int, int]], tc: int, tr: int) -> tuple[int, int]:
+        """Cell in ``cells`` closest to the target column/row."""
+        return min(cells, key=lambda cr: (cr[0] - tc) ** 2 + (cr[1] - tr) ** 2)
+
+    def _load_board(self, idx: int) -> None:
+        """Switch to board ``idx``: upload walls, fill dots, respawn everyone."""
+        board = self._boards[idx]
+        self._wall = board['wall']
+        self._passable = self._wall < 0.5
+        self._wall_tex.write(self._wall.tobytes())
+
+        pac_c, pac_r = self._nearest_passable(_W // 2, _H - 6)
+        reach = self._bfs(pac_c, pac_r)
+        self._reachable = reach
+
+        dots = np.zeros((_H, _W), dtype=np.float32)
+        if board['dots'] is not None:                    # authored dots (classic)
+            explicit = board['dots']
+            for c, r in reach:
+                dots[r, c] = explicit[r, c]
+        else:                                            # auto-fill reachable cells
+            for c, r in reach:
+                dots[r, c] = 0.5
+            for corner in [(1, 1), (_W - 2, 1), (1, _H - 2), (_W - 2, _H - 2)]:
+                pc, pr = self._nearest_in(reach, *corner)
+                dots[pr, pc] = 1.0
+        dots[pac_r, pac_c] = 0.0                         # clear Pac's start cell
+        self._dots = dots
+        self._dot_total = max(1.0, float((dots > 0.0).sum()))
+        self._dot_dirty = True
+
+        homes = [(_W - 2, 1), (1, 1), (_W - 2, _H - 2), (1, _H - 2)]
+        self._pac = _Ent(pac_c, pac_r)
+        self._ghosts = []
+        anchors = [(2, 2), (_W - 3, 2), (2, _H - 3), (_W - 3, _H - 3)]
+        self.rng.shuffle(anchors)
+        for pers in range(4):
+            gc, gr = self._nearest_in(reach, *anchors[pers])
+            g = _Ent(gc, gr, pers)
+            g.home = homes[pers]
+            self._ghosts.append(g)
+
+        self._ufo = 1.0 if self.rng.random() < self._ufo_chance else 0.0
+        self._hue = float(self.rng.uniform(0.0, 1.0))
+        self._fright = 0.0
         self._pick_dir(self._pac, ghost=False)
         for g in self._ghosts:
             self._pick_dir(g, ghost=True)
+
+    def _next_board(self) -> None:
+        """Rotate to a different random board and reset the dwell timers."""
+        choices = [i for i in range(len(self._boards)) if i != self._board_idx]
+        self._board_idx = int(self.rng.choice(choices))
+        self._load_board(self._board_idx)
+        self._board_timer = float(self.rng.uniform(self._board_min, self._board_max))
+        self._level_timer = 0.0
+        self._flash = max(self._flash, 0.85)
 
     # ------------------------------------------------------------------ maze
     def _nearest_passable(self, tc: int, tr: int) -> tuple[int, int]:
@@ -622,29 +837,23 @@ class NeonPac(BaseEffect):
                     return
 
     def _reset_positions(self) -> None:
-        """Send Pac and ghosts back to spawn (after being caught)."""
-        jx = int(self.rng.integers(-2, 3))
-        self._pac.col, self._pac.row = self._nearest_passable(
-            self._W // 2 + jx, self._H - 6)
+        """Send Pac and ghosts back to spawn on the current board (after a catch)."""
+        reach = self._reachable
+        self._pac.col, self._pac.row = self._nearest_in(reach, self._W // 2, self._H - 6)
         self._pac.prog = 0.0
         self._pac.dcol = self._pac.drow = 0
         anchors = [(2, 2), (self._W - 3, 2), (2, self._H - 3), (self._W - 3, self._H - 3)]
         self.rng.shuffle(anchors)
         for g, a in zip(self._ghosts, anchors):
-            g.col, g.row = self._nearest_passable(*a)
+            g.col, g.row = self._nearest_in(reach, *a)
             g.prog = 0.0
             g.dcol = g.drow = 0
             g.mode = 0.0
             g.respawn = 0.0
         self._fright = 0.0
-
-    def _reset_board(self) -> None:
-        """Refill pellets for a fresh level and shift the palette."""
-        self._dots = self._dots0.copy()
-        self._dot_dirty = True
-        self._level_timer = 0.0
-        self._hue = float((self._hue + self.rng.uniform(0.1, 0.35)) % 1.0)
-        self._flash = max(self._flash, 0.7)
+        self._pick_dir(self._pac, ghost=False)
+        for g in self._ghosts:
+            self._pick_dir(g, ghost=True)
 
     # ---------------------------------------------------------------- update
     def update(self, dt: float, audio: AudioData) -> None:
@@ -682,12 +891,13 @@ class NeonPac(BaseEffect):
                     if g.mode >= 0.5:
                         g.mode = 0.0
 
-        # eaten ghost respawn
+        # eaten ghost respawn (reappear near the board centre)
         for g in self._ghosts:
             if g.mode < 0.0:
                 g.respawn -= dt
                 if g.respawn <= 0.0:
-                    g.col, g.row = self._nearest_passable(self._W // 2, self._H // 2 - 4)
+                    g.col, g.row = self._nearest_in(self._reachable,
+                                                    self._W // 2, self._H // 2)
                     g.prog = 0.0
                     g.dcol = g.drow = 0
                     g.mode = 0.0
@@ -711,11 +921,12 @@ class NeonPac(BaseEffect):
 
         self._collisions()
 
-        # level completion / safety refill
+        # rotate boards on the dwell timer, or early if Pac clears the board
+        self._board_timer -= dt
         self._level_timer += dt
         remaining = float((self._dots > 0.0).sum())
-        if remaining < 0.05 * self._dot_total or self._level_timer > 90.0:
-            self._reset_board()
+        if self._board_timer <= 0.0 or remaining < 0.04 * self._dot_total:
+            self._next_board()
 
     # ---------------------------------------------------------------- render
     def render(self) -> None:
@@ -749,6 +960,7 @@ class NeonPac(BaseEffect):
         p['iDeath'].value = self._death
         p['iHue'].value = self._hue
         p['iGlitter'].value = max(0.0, float(self.parameters['glitter']))
+        p['iUfo'].value = self._ufo
 
         pac = self._pac
         pdir = (float(pac.dcol), float(pac.drow))
