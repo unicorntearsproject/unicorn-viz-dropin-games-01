@@ -119,11 +119,13 @@ class _Ent:
 
     @property
     def gx(self) -> float:
-        return self.col + self.dcol * self.prog
+        # +0.5 places the sprite in the channel centre (where dots sit), not on
+        # the grid line at the cell corner.
+        return self.col + 0.5 + self.dcol * self.prog
 
     @property
     def gy(self) -> float:
-        return self.row + self.drow * self.prog
+        return self.row + 0.5 + self.drow * self.prog
 
 
 _VERT = """
@@ -174,52 +176,120 @@ float hash21(vec2 p) {
     return fract(p.x * p.y);
 }
 
+mat2 rot(float a) { float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }
+
+vec3 palette(float t) {
+    return 0.5 + 0.5 * cos(TAU * (t + vec3(0.0, 0.33, 0.67)));
+}
+
 float wallAt(ivec2 c) {
     if (c.x < 0 || c.y < 0 || c.x >= int(iGrid.x) || c.y >= int(iGrid.y))
         return 0.0;
     return texelFetch(iWall, c, 0).r;
 }
 
+// Swirling, domain-warped plasma field in roughly [0,1].
+float plasma(vec2 p, float t) {
+    p *= 2.2;
+    vec2 q = vec2(sin(p.y * 0.9 + t * 0.7), cos(p.x * 0.8 - t * 0.6));
+    float v = sin(p.x * 1.5 + t * 1.3)
+            + sin(p.y * 1.7 - t * 1.1)
+            + sin((p.x + q.x) * 1.9 + (p.y + q.y) * 1.3 + t * 0.9)
+            + sin(length(p - q) * 2.3 - t * 1.4);
+    return v * 0.25 + 0.5;
+}
+
+// Full-screen cosmic backdrop: spinning plasma cloud + stars + comets.
+vec3 backdrop(vec2 uv, float aspect, float t) {
+    vec2 p = (uv - 0.5) * vec2(aspect, 1.0);
+    p = rot(t * 0.08 + iBass * 0.5) * p;                 // spin
+    float r = length(p);
+    float pulse = 0.85 + 0.28 * sin(t * 1.5 + iBass * 3.0);
+    float v = plasma(p * pulse, t);
+
+    vec3 col = palette(v * 0.6 + iHue + t * 0.03);
+    col *= col;                                          // deepen
+    col *= 0.35 + 0.9 * v;                               // contrast
+    // banded filaments for a churning-cloud read
+    col += palette(iHue + 0.15) * pow(0.5 + 0.5 * sin(v * 9.0 + t * 1.6), 3.0) * 0.35;
+    float core = smoothstep(1.25, 0.0, r) * (0.6 + iBass * 1.1 + iBeat * 0.9);
+    col += palette(iHue + 0.3) * core * 0.9;             // glowing bass heart
+    col *= 0.78;
+
+    // twinkling stars
+    vec2 sg = uv * vec2(aspect, 1.0) * 78.0;
+    float sh = hash21(floor(sg));
+    if (sh > 0.93) {
+        float tw = 0.5 + 0.5 * sin(t * (2.0 + sh * 6.0) + sh * 40.0);
+        float sd = length(fract(sg) - 0.5);
+        col += vec3(0.8, 0.9, 1.0) * smoothstep(0.42, 0.0, sd) * tw
+             * (0.6 + iTreble * 1.4);
+    }
+
+    // streaking comets with glowing tails
+    for (int i = 0; i < 3; i++) {
+        float fi = float(i);
+        float prog = fract(t / (6.0 + fi * 2.5) + fi * 0.37);
+        vec2 dir = normalize(vec2(0.85 - 0.35 * fi, -0.55 + 0.32 * fi) + 0.001);
+        vec2 cp = vec2(-0.9 + fi * 0.2, 0.7 - fi * 0.35) + dir * prog * 2.4;
+        vec2 rel = (uv - 0.5) * vec2(aspect, 1.0) - cp;
+        float along = dot(rel, dir);
+        float perp = length(rel - dir * along);
+        float head = exp(-length(rel) * 40.0);
+        float tail = exp(-perp * 48.0) * exp(-max(-along, 0.0) * 5.0);
+        vec3 cc = mix(vec3(0.7, 0.86, 1.0), palette(iHue + fi * 0.2 + 0.5), 0.4);
+        col += cc * (head * 2.4 + tail * 1.3) * (0.9 + iBeat * 0.9);
+    }
+    return col;
+}
+
 void main() {
-    vec2 frag = v_uv * iResolution;
-    vec2 gc = vec2((frag.x - iOriginX) / iCell,
-                   (iOriginTopY - frag.y) / iCell);
+    vec2 uv = v_uv;
+    float aspect = iResolution.x / max(iResolution.y, 1.0);
+    float t = iTime;
+    vec2 frag = uv * iResolution;
+    vec2 gc = vec2((frag.x - iOriginX) / iCell, (iOriginTopY - frag.y) / iCell);
     ivec2 cell = ivec2(floor(gc));
     vec2 f = fract(gc) - 0.5;
 
-    vec3 col = vec3(0.010, 0.010, 0.030);
+    vec3 bg = backdrop(uv, aspect, t);
+    vec3 col = bg;
     bool inBoard = (gc.x >= 0.0 && gc.y >= 0.0 && gc.x < iGrid.x && gc.y < iGrid.y);
 
-    // ---- maze walls: dark blue fill + bright neon edges facing open path ----
+    // ---- maze walls: neon tube covering the plasma, path channels dimmed ----
     float thisWall = inBoard ? wallAt(cell) : 0.0;
     if (thisWall > 0.5) {
-        col += vec3(0.00, 0.03, 0.10);
+        col = mix(bg * 0.20, vec3(0.02, 0.05, 0.18), 0.85);
         float e = 0.0;
         if (wallAt(cell + ivec2( 1, 0)) < 0.5) e = max(e, smoothstep(0.34, 0.5,  f.x));
         if (wallAt(cell + ivec2(-1, 0)) < 0.5) e = max(e, smoothstep(0.34, 0.5, -f.x));
         if (wallAt(cell + ivec2( 0, 1)) < 0.5) e = max(e, smoothstep(0.34, 0.5,  f.y));
         if (wallAt(cell + ivec2( 0,-1)) < 0.5) e = max(e, smoothstep(0.34, 0.5, -f.y));
-        vec3 neon = mix(vec3(0.10, 0.45, 1.0), vec3(0.25, 0.85, 1.0),
-                        0.5 + 0.5 * sin(iTime * 1.5 + iHue * TAU + iMid * 2.0));
-        col += neon * e * (1.1 + iBass * 0.6);
-        col += neon * e * e * 0.6;                 // bloom
+        vec3 neon = mix(vec3(0.15, 0.5, 1.0), vec3(0.3, 0.9, 1.0),
+                        0.5 + 0.5 * sin(t * 1.5 + iHue * TAU + iMid * 2.0));
+        float breathe = 0.85 + 0.15 * sin(t * 2.0 + iBass * 4.0);
+        col += neon * e * (1.2 + iBass * 0.7) * breathe;
+        col += neon * e * e * 0.7;                       // bloom
+        col += neon * 0.05 * smoothstep(0.5, 0.0, length(f));  // inner sheen
     } else if (inBoard) {
-        // ---- dots + power-pellets ----
+        col *= 0.42;                                     // dim plasma in channels
         float dv = texelFetch(iDot, cell, 0).r;
         float dd = length(f);
-        if (dv > 0.75) {                            // power-pellet: big, blinking
-            float amp = 0.5 + 0.5 * sin(iTime * 6.0);
-            float g = smoothstep(0.26 * (0.7 + 0.3 * amp), 0.0, dd);
-            col += vec3(1.0, 0.85, 0.5) * g * (1.3 + iBass * 0.9);
-            col += vec3(1.0, 0.70, 0.3) * g * g * 0.8;
-        } else if (dv > 0.25) {                     // pellet: small, treble sparkle
-            float g = smoothstep(0.11, 0.0, dd);
-            float spk = 1.0 + iTreble * 1.6 * hash21(vec2(cell) + floor(iTime * 8.0));
-            col += vec3(1.0, 0.82, 0.55) * g * spk * 0.9;
+        if (dv > 0.75) {                                 // power-pellet
+            float amp = 0.5 + 0.5 * sin(t * 6.0);
+            float g = smoothstep(0.27 * (0.7 + 0.3 * amp), 0.0, dd);
+            vec3 pc = mix(vec3(1.0, 0.85, 0.5), palette(iHue + t * 0.2), 0.4);
+            col += pc * g * (1.4 + iBass * 1.0);
+            col += pc * g * g * 0.9;
+            col += vec3(1.0) * smoothstep(0.08, 0.0, length(f - vec2(-0.06, 0.06))) * g;  // glint
+        } else if (dv > 0.25) {                          // pellet
+            float g = smoothstep(0.12, 0.0, dd);
+            float spk = 1.0 + iTreble * 1.8 * hash21(vec2(cell) + floor(t * 8.0));
+            col += vec3(1.0, 0.82, 0.55) * g * spk * 1.0;
         }
     }
 
-    // ---- Pac-Man: chomping wedge facing its travel direction ----
+    // ---- Pac-Man: glossy chomping wedge with sparkle bling ----
     {
         vec2 pq = gc - iPacPos;
         float dist = length(pq);
@@ -230,56 +300,68 @@ void main() {
         float body = smoothstep(0.05, -0.02, dist - r);
         float mouth = smoothstep(mouthHalf + 0.06, mouthHalf - 0.06, rel);
         float pac = body * (1.0 - mouth);
-        vec3 py = mix(vec3(1.0, 0.85, 0.05), vec3(1.0, 1.0, 0.5), iPacPower);
-        col += py * pac * (1.25 + iBeat * 0.4);
-        col += py * pac * 0.5 * smoothstep(r * 1.9, 0.0, dist);   // halo bloom
+        vec3 py = mix(vec3(1.0, 0.82, 0.02), vec3(1.0, 1.0, 0.55), iPacPower);
+        vec3 shaded = py * (0.55 + 0.55 * (1.0 - dist / r));           // spherical shade
+        col = mix(col, shaded, pac);
+        col += vec3(1.0) * smoothstep(0.13, 0.0, length(pq - vec2(-0.14, 0.15))) * pac;  // spec
+        for (int k = 0; k < 2; k++) {                     // rotating sparkle glints
+            float ka = t * 3.0 + float(k) * PI;
+            float sd = length(pq - vec2(cos(ka), sin(ka)) * r * 0.55);
+            col += vec3(1.0, 1.0, 0.9) * smoothstep(0.05, 0.0, sd) * pac;
+        }
+        col += py * smoothstep(r * 2.0, r * 0.7, dist) * (0.25 + iBeat * 0.55);  // aura
     }
 
-    // ---- ghosts: dome + wavy skirt silhouette with directional eyes ----
+    // ---- ghosts: glossy silhouette, glowing eyes, animated skirt ----
     for (int i = 0; i < 4; i++) {
         if (iGhostMode[i] < -0.5) continue;
         vec2 e = gc - iGhostPos[i];
-        e.y = -e.y;                                 // flip so dome is up
+        e.y = -e.y;                                       // flip so dome is up
+        col += iGhostCol[i] * smoothstep(0.72, 0.4, length(e)) * 0.12;   // outer aura
         float d = length(vec2(e.x, max(e.y, 0.0))) - 0.40;
-        float skirt = -0.34 + 0.07 * abs(sin(e.x * 11.0));
+        float skirt = -0.34 + 0.07 * abs(sin(e.x * 11.0 + t * 3.0));     // wobbling skirt
         float m = smoothstep(0.03, -0.02, d) * smoothstep(-0.02, 0.02, e.y - skirt);
         if (m <= 0.0) continue;
 
         bool fright = iGhostMode[i] > 0.5;
         bool blink  = iGhostMode[i] > 1.5;
-        vec3 gcol = fright ? (blink ? vec3(0.95, 0.97, 1.0) : vec3(0.15, 0.20, 1.0))
+        vec3 gcol = fright ? (blink ? vec3(0.95, 0.97, 1.0) : vec3(0.2, 0.25, 1.0))
                            : iGhostCol[i];
-        col += gcol * m * (1.05 + iMid * 0.5);
-        col += gcol * m * 0.5 * smoothstep(0.75, 0.0, length(e));   // bloom
+        vec3 shaded = mix(gcol * 0.65, mix(gcol, vec3(1.0), 0.55),
+                          clamp(e.y * 1.4 + 0.5, 0.0, 1.0)) * (1.0 + iMid * 0.4);
+        col = mix(col, shaded, m);
+        col += vec3(1.0) * smoothstep(0.12, 0.0, length(e - vec2(-0.13, 0.18))) * m * 0.8;  // spec
+        float gl = length(e - vec2(0.16 * sin(t * 2.0 + float(i)), 0.20));
+        col += vec3(1.0) * smoothstep(0.045, 0.0, gl) * m;               // sparkle
 
         vec2 ed = (length(iGhostDir[i]) > 0.01)
                     ? normalize(vec2(iGhostDir[i].x, -iGhostDir[i].y)) : vec2(0.0);
         for (int s = -1; s <= 1; s += 2) {
             vec2 ec = vec2(float(s) * 0.16, 0.12);
-            float white = smoothstep(0.13, 0.10, length(e - ec)) * m;
-            col = mix(col, vec3(0.95, 0.97, 1.0), white);
+            col += vec3(0.5, 0.7, 1.0) * smoothstep(0.17, 0.10, length(e - ec)) * m * 0.35;  // glow
+            col = mix(col, vec3(0.98), smoothstep(0.13, 0.10, length(e - ec)) * m);
             if (!fright) {
                 float pup = smoothstep(0.07, 0.04, length(e - ec - ed * 0.06)) * m;
-                col = mix(col, vec3(0.04, 0.05, 0.25), pup);
+                col = mix(col, vec3(0.03, 0.05, 0.30), pup);
             }
         }
-        if (fright) {                               // scared zig-zag mouth
+        if (fright) {
             float mo = smoothstep(0.03, 0.0, abs(e.y + 0.12)) * step(abs(e.x), 0.24);
             col += vec3(0.9, 0.95, 1.0) * mo * m * 0.6;
         }
     }
 
-    // ---- neon post: flashes, glitter, vignette ----
-    col += vec3(1.0) * iFlash * 0.22;
-    col += vec3(1.0, 0.10, 0.10) * iDeath * 0.40;
-    float sp = hash21(floor(frag * 0.5) + floor(iTime * 20.0));
-    col += vec3(0.8, 0.9, 1.0) * step(0.995, sp) * (0.3 + iTreble * 0.8) * iGlitter;
-    float vig = smoothstep(1.30, 0.20, length(v_uv - 0.5));
+    // ---- post: eat-sparkle, danger flash, glitter, vignette ----
+    col += palette(iHue + 0.5) * iFlash * 0.18;
+    col += vec3(1.0, 0.08, 0.08) * iDeath * 0.45;
+    float sp = hash21(floor(frag * 0.5) + floor(t * 20.0));
+    col += vec3(0.85, 0.92, 1.0) * step(0.994, sp) * (0.35 + iTreble * 0.9) * iGlitter;
+    float vig = smoothstep(1.32, 0.18, length(uv - 0.5));
     col *= vig;
-    col += vec3(0.4, 0.2, 0.8) * iBeat * 0.06 * (1.0 - vig);
+    col += palette(iHue + 0.2) * iBeat * 0.05 * (1.0 - vig);
 
     col = col / (1.0 + col * 0.5);
-    col = pow(clamp(col, 0.0, 1.0), vec3(0.85));
+    col = pow(clamp(col, 0.0, 1.0), vec3(0.82));
     fragColor = vec4(col, 1.0);
 }
 """
