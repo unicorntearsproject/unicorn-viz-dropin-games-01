@@ -356,7 +356,7 @@ void main() {
     // ---- maze walls: neon tube covering the plasma, path channels dimmed ----
     float thisWall = inBoard ? wallAt(cell) : 0.0;
     if (thisWall > 0.5) {
-        col = mix(bg * 0.20, vec3(0.02, 0.05, 0.18), 0.85);
+        col = mix(bg * 0.20, vec3(0.02, 0.05, 0.18), 0.76);   // walls 10% less opaque
         float e = 0.0;
         if (wallAt(cell + ivec2( 1, 0)) < 0.5) e = max(e, smoothstep(0.34, 0.5,  f.x));
         if (wallAt(cell + ivec2(-1, 0)) < 0.5) e = max(e, smoothstep(0.34, 0.5, -f.x));
@@ -369,7 +369,7 @@ void main() {
         col += neon * e * e * 0.7;                       // bloom
         col += neon * 0.05 * smoothstep(0.5, 0.0, length(f));  // inner sheen
     } else if (inBoard) {
-        col *= 0.42;                                     // dim plasma in channels
+        col *= 0.46;                                     // board background 10% more opaque
         float dv = texelFetch(iDot, cell, 0).r;
         float dd = length(f);
         if (dv > 0.75) {                                 // power-pellet
@@ -430,7 +430,8 @@ void main() {
                 float sd = length(pq - vec2(cos(ka), sin(ka)) * r * 0.55);
                 col += vec3(1.0, 1.0, 0.9) * smoothstep(0.05, 0.0, sd) * pac;
             }
-            col += py * smoothstep(r * 2.0, r * 0.7, dist) * (0.25 + iBeat * 0.55);  // aura
+            col += py * smoothstep(r * 2.0, r * 0.7, dist) * (0.25 + iBeat * 0.55)
+                 * (1.0 + 0.05 * (0.5 + 0.5 * sin(iTime * 3.0)));   // glow breathes ±5%
         }
     }
 
@@ -444,7 +445,7 @@ void main() {
         col += iGhostCol[i] * smoothstep(0.72, 0.4, length(e)) * 0.12;   // outer aura
 
         if (iUfo > 0.5) {                                 // little grey alien head
-            float hw = 0.30 * (0.55 + 0.45 * clamp(e.y + 0.5, 0.0, 1.0));  // narrow chin
+            float hw = 0.51 * (0.55 + 0.45 * clamp(e.y + 0.5, 0.0, 1.0));  // 70% wider, narrow chin
             float head = 1.0 - smoothstep(-0.03, 0.03, length(e / vec2(hw, 0.42)) - 1.0);
             if (head <= 0.0) continue;
             vec3 grey = mix(vec3(0.42, 0.52, 0.45), vec3(0.78, 0.86, 0.78),
@@ -453,7 +454,7 @@ void main() {
             col = mix(col, grey, head);
             col += vec3(1.0) * smoothstep(0.09, 0.0, length(e - vec2(-0.09, 0.22))) * head * 0.6;
             for (int s = -1; s <= 1; s += 2) {            // big slanted almond eyes
-                vec2 le = rot(float(s) * 0.5) * (e - vec2(float(s) * 0.11, -0.02));
+                vec2 le = rot(float(s) * 0.5) * (e - vec2(float(s) * 0.16, -0.02));
                 float eye = 1.0 - smoothstep(-0.02, 0.02, length(le / vec2(0.055, 0.12)) - 1.0);
                 col = mix(col, vec3(0.02, 0.02, 0.04), eye * head);
                 col += vec3(0.6, 1.0, 0.8)

@@ -166,11 +166,6 @@ vec3 drawInvader(vec2 q, vec3 c, float hp, float anim, float pulse) {
     float m = smoothstep(0.03, -0.02, body);
     vec3 base = c * (1.1 + boss * 0.4);
     vec3 o = base * (0.65 + 0.5 * clamp(q.y + 0.35, 0.0, 1.0)) * m;   // top-lit
-    for (int s2 = -1; s2 <= 1; s2 += 2) {                            // eyes
-        vec2 ec = vec2(float(s2) * 0.13, 0.03);
-        o = mix(o, vec3(1.0), smoothstep(0.08, 0.02, length(q - ec)) * m);
-        o = mix(o, vec3(0.05, 0.02, 0.12), smoothstep(0.04, 0.01, length(q - ec)) * m);
-    }
     float ant = (smoothstep(0.03, 0.0, abs(q.x - 0.11)) + smoothstep(0.03, 0.0, abs(q.x + 0.11)))
               * smoothstep(0.20, 0.30, q.y) * smoothstep(0.40, 0.30, q.y);
     o += base * ant * 0.8;
@@ -185,6 +180,12 @@ vec3 drawInvader(vec2 q, vec3 c, float hp, float anim, float pulse) {
     o += base * smoothstep(s * 1.7, 0.0, length(q)) * (0.15 + pulse * 0.35);  // aura
     o += vec3(1.0, 0.9, 0.4) * boss
        * smoothstep(0.04, 0.0, abs(length(q) - s * 1.15)) * 0.5;     // boss crown
+    // eyes drawn last so the glow/aura can't wash them out (high contrast)
+    for (int s2 = -1; s2 <= 1; s2 += 2) {
+        vec2 ec = vec2(float(s2) * 0.13, 0.03);
+        o = mix(o, vec3(1.0), smoothstep(0.085, 0.03, length(q - ec)) * m);
+        o = mix(o, vec3(0.02, 0.01, 0.05), smoothstep(0.05, 0.015, length(q - ec)) * m);
+    }
     return o;
 }
 
@@ -194,7 +195,8 @@ vec3 drawShip(vec2 q, float t, float thrust, float pulse) {
     vec2 aq = vec2(abs(q.x), q.y);
     // sleek fuselage: a vertical lens pointed at nose and tail
     float prof = sin(clamp((q.y + 0.62) / 1.55, 0.0, 1.0) * PI);
-    float fus = smoothstep(0.035, -0.02, abs(q.x) - 0.28 * prof);
+    // gate on prof so the nose tapers to nothing (no beam shooting past the tip)
+    float fus = smoothstep(0.035, -0.02, abs(q.x) - 0.28 * prof) * smoothstep(0.0, 0.06, prof);
     // bold swept-back delta wings
     vec2 wq = rot(0.72) * (aq - vec2(0.30, -0.16));
     float wing = smoothstep(0.04, -0.02, max(abs(wq.x) - 0.46, abs(wq.y) - 0.075));
