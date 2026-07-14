@@ -357,6 +357,10 @@ class Joust(BaseEffect):
         for fx, y, fw in _PLATFORMS:
             yield fx * a * 0.9, y, fw
 
+    def _all_birds(self) -> list[_Bird]:
+        """Return the player plus every active enemy."""
+        return [self._player, *self._enemies]
+
     # -------------------------------------------------------------- physics/AI
     def _wrapdx(self, tx: float, x: float) -> float:
         a = self._A
@@ -371,6 +375,11 @@ class Joust(BaseEffect):
         b.vy = min(b.vy + _FLAP, _MAX_VY)
         b.flap_hot = 1.0
 
+    # Soft ceiling for altitude-seeking AI: comfortably below the hard clamp
+    # (0.95) so "get above the target" chains can't spiral both sides all the
+    # way to the top and pile up there.
+    _CEILING_SOFT = 0.72
+
     def _ai(self, b: _Bird, dt: float, tempo: float) -> None:
         """Pick a horizontal target and decide when to flap."""
         if b.kind == 0:                                  # player: hunt the lowest enemy
@@ -384,15 +393,33 @@ class Joust(BaseEffect):
                 tx, ty = b.x, 0.35
         else:                                            # enemy: get above the player
             tx, ty = self._player.x, self._player.y + 0.14
+        ty = min(ty, self._CEILING_SOFT)                 # never chase altitude off the top
 
         dx = self._wrapdx(tx, b.x)
         b.face = 1.0 if dx >= 0.0 else -1.0
         desired_vx = math.copysign(_CRUISE * tempo, dx) if abs(dx) > 0.04 else 0.0
         b.vx += (desired_vx - b.vx) * min(1.0, dt * 3.0)
 
+        # Nudge apart from any bird we're nearly coincident with so riders
+        # converging on the same altitude/target don't just stack and jitter.
+        for other in self._all_birds():
+            if other is b:
+                continue
+            ddx = self._wrapdx(other.x, b.x)
+            ddy = other.y - b.y
+            dist2 = ddx * ddx + ddy * ddy
+            if 0.0 < dist2 < 0.014:
+                push = 0.9 * (1.0 - dist2 / 0.014)
+                b.vx -= math.copysign(push, ddx if ddx != 0.0 else 1.0)
+
         # flap to reach/hold target altitude (and never sink into the lava)
         near_lava = b.y < _LAVA_Y + 0.22
-        want_up = b.y < ty - 0.03 or b.vy < -0.25
+        # Project where momentum alone (plus one more flap) would coast to, so
+        # a bird can't stack flaps right at the ceiling gate and sail past it
+        # on pure momentum — gate on the projected apex, not just current y.
+        apex = b.y + max(0.0, b.vy + _FLAP) ** 2 / (2.0 * _GRAV)
+        below_ceiling = apex < self._CEILING_SOFT
+        want_up = (b.y < ty - 0.03 or b.vy < -0.25) and below_ceiling
         rate = dt * (2.4 + self._mid * 2.0) * tempo
         if near_lava or (want_up and self.rng.random() < rate):
             self._flap(b)
@@ -459,8 +486,11 @@ class Joust(BaseEffect):
                     d = math.copysign(0.4, self._wrapdx(pl.x, e.x))
                     pl.vx = d
                     e.vx = -d
-                    pl.vy += 0.15
-                    e.vy += 0.15
+                    # Clamp — repeated clashes in a cluster must not stack vy
+                    # past _MAX_VY (an uncapped += here was the root cause of
+                    # birds rocketing into the ceiling on momentum overshoot).
+                    pl.vy = min(pl.vy + 0.15, _MAX_VY)
+                    e.vy = min(e.vy + 0.15, _MAX_VY)
 
     def _update_eggs(self, dt: float) -> None:
         pl = self._player
@@ -548,7 +578,7 @@ class Joust(BaseEffect):
         p['iLavaGlow'].value = float(np.clip(self._lava, 0.0, 2.0))
         p['iPlayerInvuln'].value = 1.0 if self._player_invuln > 0.0 else 0.0
 
-        birds = [self._player] + self._enemies
+        birds = self._all_birds()
         pos, face, wing, kind = [], [], [], []
         for i in range(_NB):
             if i < len(birds):
