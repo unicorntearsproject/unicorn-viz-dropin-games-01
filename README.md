@@ -1,6 +1,6 @@
 # games-01 — Unicorn Viz effect pack
 
-**Version 0.11.0**
+**Version 0.11.1**
 
 
 arcade / game-like visuals: Breakout, Neon Pac, Galaga, Joust, Tetris,
@@ -9,6 +9,15 @@ Missile Command, Donkey Kong, Q*bert.
 Each effect subclasses `unicornviz.effects.base.BaseEffect` and is auto-discovered.
 
 ## Changelog
+
+- **0.11.1** — Missile Command: a plain uniform draw of the 4 cityscape
+  styles on activation had a 1-in-4 chance of repeating whatever style the
+  previous activation last showed, which read as "it didn't change" even
+  though the pick was genuinely random. Added a class-level `_last_style`
+  tracker (updated on every activation and every in-session style switch) so
+  the startup draw always excludes the immediately-previous style. Verified
+  across 20 consecutive fresh instantiations: zero back-to-back repeats,
+  still an even spread across all 4 styles.
 
 - **0.11.0** — Missile Command cityscape overhaul:
   - Fixed a coordinate-space bug where the cityscape/backdrop only spanned a

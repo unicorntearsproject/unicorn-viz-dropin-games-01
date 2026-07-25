@@ -272,6 +272,12 @@ class MissileCommand(BaseEffect):
     ]
 
     _GROUND_Y = 0.10
+    # Cityscape style shown by the most recent instance, across activations in
+    # this process. A plain uniform draw on every activation has a 1-in-4
+    # chance of repeating the previous style back-to-back, which reads as "it
+    # didn't change" even though the pick was genuinely random; excluding the
+    # last-shown style from the draw removes that case entirely.
+    _last_style: int | None = None
 
     def _init(self) -> None:
         self.parameters = {
@@ -286,7 +292,9 @@ class MissileCommand(BaseEffect):
         self._beat = 0.0
         self._flash = 0.0
         self._hue = float(self.rng.uniform(0.0, 1.0))
-        self._style = int(self.rng.integers(0, _NSTYLE))
+        style_choices = [s for s in range(_NSTYLE) if s != MissileCommand._last_style]
+        self._style = int(self.rng.choice(style_choices))
+        MissileCommand._last_style = self._style
         self._style_timer = float(self.rng.uniform(24.0, 40.0))
 
         self._city_x = [0.08 + 0.84 * i / (_NCITY - 1) for i in range(_NCITY)]
@@ -330,6 +338,7 @@ class MissileCommand(BaseEffect):
         """Switch to a different cityscape scene style."""
         choices = [s for s in range(_NSTYLE) if s != self._style]
         self._style = int(self.rng.choice(choices))
+        MissileCommand._last_style = self._style
         self._style_timer = float(self.rng.uniform(24.0, 40.0))
 
     def _spawn_explosion(self, x: float, y: float) -> None:
