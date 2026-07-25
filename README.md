@@ -1,6 +1,6 @@
 # games-01 — Unicorn Viz effect pack
 
-**Version 0.10.0**
+**Version 0.11.0**
 
 
 arcade / game-like visuals: Breakout, Neon Pac, Galaga, Joust, Tetris,
@@ -9,6 +9,31 @@ Missile Command, Donkey Kong, Q*bert.
 Each effect subclasses `unicornviz.effects.base.BaseEffect` and is auto-discovered.
 
 ## Changelog
+
+- **0.11.0** — Missile Command cityscape overhaul:
+  - Fixed a coordinate-space bug where the cityscape/backdrop only spanned a
+    fraction of the screen — the shader's world space was non-centred
+    (`p = vec2(uv.x * A, uv.y)`, range `[0, A]`) while city/battery x
+    positions were plain `[0, 1]` fractions, so on any window wider than
+    square the whole skyline sat bunched near the left edge. World space is
+    now centred (`p = (uv - 0.5) * vec2(A, 1.0)`) and every simulation
+    position is converted to it on upload; verified via offscreen renders
+    that skyline pixel coverage now reaches both screen edges.
+  - Cities went from a flat 5-building silhouette to a 7-building skyline
+    with varied width/height, a lit window grid, and a continuous two-layer
+    procedural background skyline that fills the ground across the entire
+    width (not just at the six named city markers), so the horizon is never
+    sparse.
+  - Added four cycling cityscape scene styles — classic neon (the original
+    look, width-fixed), chrome spires (glinting rooftop antennae + drip
+    streaks), circuit ruins (glowing horizontal trace lines), and drip fade
+    (heavier, faster-flowing neon paint streaks) — switched whenever the
+    city/battery line is fully wiped and rebuilt, and periodically on a
+    randomised 24-40s timer, so a long session keeps evolving. Gameplay,
+    missiles, batteries, and blasts are unchanged.
+  - Verified via offscreen renders per style/scenario (quiet/moderate/loud
+    beat), a high-iTime stress test, and a 180s headless sim confirming
+    style transitions actually occur during real play.
 
 - **0.10.0** — four new effects, each a real CPU simulation rendered as neon
   (same architecture as the rest of the pack — no procedural-only fakes):

@@ -11,14 +11,23 @@ with real, legible missile-command play — waves escalate forever, and a
 wiped-out city line quietly rebuilds into the next wave rather than ending
 the show.
 
+The backdrop cycles through four cityscape scenes — classic neon, chrome
+spires, circuit ruins, and drip fade — each with its own palette, skyline
+silhouette, and building ornamentation. A scene switch is triggered whenever
+the whole city/battery line is wiped and rebuilt, and also periodically on a
+randomised timer, so the skyline keeps evolving through a long session. A
+continuous two-layer procedural skyline spans the full screen width behind
+the six named cities so the ground is never sparse between them.
+
 Audio reactivity:
   - bass    -> missile speed, blast-radius punch
   - mid     -> battery fire-rate, palette drift
   - treble  -> ember/spark sparkle on blasts and trails
   - beat    -> screen flash, palette shift, salvo burst
 
-Randomised per activation: palette hue, wave phase, battery ammo timers, and
-``self.time`` — no two runs look or play alike from frame 0.
+Randomised per activation: palette hue, cityscape scene style, wave phase,
+battery ammo timers, and ``self.time`` — no two runs look or play alike from
+frame 0.
 """
 from __future__ import annotations
 
@@ -32,6 +41,7 @@ _NBAT = 3
 _NENEMY = 14
 _NINTER = 9
 _NEXPL = 10
+_NSTYLE = 4  # 0 classic neon, 1 chrome spires, 2 circuit ruins, 3 drip fade
 _OFF = 1000.0
 
 _VERT = """
@@ -56,6 +66,7 @@ uniform float iFlash;
 uniform float iHue;
 uniform float iGlitter;
 uniform float iGroundY;
+uniform int   iStyle;
 uniform vec2  iCityPos[6];
 uniform float iCityAlive[6];
 uniform vec2  iBatPos[3];
@@ -94,6 +105,34 @@ vec3 backdrop(vec2 uv, float A, float t) {
     return col;
 }
 
+// Continuous procedural skyline spanning the full screen width so the ground
+// is never empty between/around the six named cities. Two parallax layers;
+// iStyle re-tints and re-decorates it per scene.
+vec3 skyline(vec2 p, float t, float groundWorldY) {
+    vec3 col = vec3(0.0);
+    for (int layer = 0; layer < 2; layer++) {
+        float fl = float(layer);
+        float freq = 16.0 - fl * 5.0;
+        float drift = t * (0.012 + fl * 0.01) * (1.0 + float(iStyle == 3) * 1.6);
+        float px = p.x * freq - drift;
+        float id = floor(px);
+        float fx = fract(px);
+        float h = hash21(vec2(id, fl * 3.7 + float(iStyle) * 9.1));
+        float bh = groundWorldY + (0.04 + h * (0.10 - fl * 0.035));
+        float edge = smoothstep(0.0, 0.01, fx) * smoothstep(1.0, 0.99, fx);
+        float mask = edge * step(groundWorldY, p.y) * step(p.y, bh);
+        vec3 hueCol = palette(iHue + h * 0.18 + fl * 0.08 + float(iStyle) * 0.05);
+        col = mix(col, hueCol * (0.20 + fl * 0.30), mask);
+        float winH = hash21(vec2(id * 4.0 + floor(fx * 5.0), floor((bh - p.y) * 30.0) + fl * 11.0));
+        col += vec3(1.0, 0.8, 0.5) * step(0.72, winH) * mask * (0.12 + 0.12 * sin(t * 3.0 + winH * 30.0));
+        if (iStyle == 2) {
+            float trace = step(0.985, hash21(vec2(id, floor(p.y * 60.0) + fl))) * mask;
+            col += vec3(0.2, 1.0, 0.85) * trace * 1.4;
+        }
+    }
+    return col;
+}
+
 float segDist(vec2 p, vec2 a, vec2 b) {
     vec2 pa = p - a, ba = b - a;
     float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0);
@@ -110,18 +149,46 @@ vec3 drawTrail(vec2 p, vec2 from, vec2 to, float prog, vec3 col) {
     return col * (line * 0.7 + headGlow * 1.6);
 }
 
-vec3 drawCity(vec2 p, vec2 pos, bool alive, vec3 col) {
+// Drip streaks: vertical neon paint bleeding down from a roofline.
+float dripStreaks(vec2 q, float bh, float seed, float t) {
+    float lane = floor(q.x * 60.0);
+    float h = hash21(vec2(lane, seed));
+    float len = 0.01 + h * 0.05;
+    float flow = fract(t * (0.15 + h * 0.3) + h);
+    float dripY = bh - flow * len;
+    float d = abs(q.x - (lane + 0.5) / 60.0);
+    return smoothstep(0.006, 0.0, d) * smoothstep(dripY - len, dripY, q.y) * step(q.y, bh);
+}
+
+vec3 drawCity(vec2 p, vec2 pos, bool alive, vec3 col, float seed) {
     vec2 q = p - pos;
-    if (abs(q.x) > 0.05 || q.y < -0.005 || q.y > 0.045) return vec3(0.0);
+    if (abs(q.x) > 0.075 || q.y < -0.005 || q.y > 0.075) return vec3(0.0);
     float bld = 0.0;
-    for (int i = -2; i <= 2; i++) {
-        float bx = float(i) * 0.018;
-        float bh = 0.02 + 0.012 * hash21(vec2(pos.x * 50.0 + float(i), 3.0));
-        float m = step(abs(q.x - bx), 0.007) * step(q.y, bh);
+    float topY = 0.0;
+    for (int i = -3; i <= 3; i++) {
+        float bx = float(i) * 0.019;
+        float bh = 0.022 + 0.030 * hash21(vec2(seed + float(i), 3.0));
+        float bw = 0.008 + 0.004 * hash21(vec2(seed + float(i), 7.0));
+        float m = step(abs(q.x - bx), bw) * step(q.y, bh);
         bld = max(bld, m);
+        topY = max(topY, bh * m);
     }
-    vec3 c = alive ? col * (0.8 + 0.4 * sin(iTime * 2.0 + pos.x * 10.0)) : vec3(0.12, 0.05, 0.04);
-    return c * bld;
+    float pulse = alive ? (0.8 + 0.4 * sin(iTime * 2.0 + pos.x * 10.0)) : 1.0;
+    vec3 c = (alive ? col * pulse : vec3(0.12, 0.05, 0.04)) * bld;
+    float winRow = floor(q.y * 90.0);
+    float winCol = floor((q.x + 0.06) * 140.0);
+    float winH = hash21(vec2(winCol, winRow + seed * 5.0));
+    float win = step(0.55, winH) * bld * step(0.0, q.y);
+    c += (alive ? vec3(1.0, 0.85, 0.5) : vec3(0.3, 0.1, 0.05))
+       * win * (0.4 + 0.3 * sin(iTime * 2.5 + winH * 30.0));
+    if (alive && iStyle == 1) {
+        float spire = smoothstep(0.004, 0.0, abs(q.x)) * step(topY, q.y) * step(q.y, topY + 0.02);
+        c += vec3(0.8, 0.95, 1.0) * spire * 1.5;
+    }
+    if (alive && (iStyle == 1 || iStyle == 3)) {
+        c += col * dripStreaks(q + vec2(0.06, 0.0), topY, seed, iTime) * 1.3;
+    }
+    return c;
 }
 
 vec3 drawBattery(vec2 p, vec2 pos, bool alive, vec3 col) {
@@ -147,10 +214,12 @@ vec3 drawBlast(vec2 p, vec3 e, vec3 col) {
 void main() {
     float A = iResolution.x / max(iResolution.y, 1.0);
     vec2 uv = v_uv;
-    vec2 p = vec2(uv.x * A, uv.y);
+    vec2 p = (uv - 0.5) * vec2(A, 1.0);
     float t = iTime;
+    float groundWorldY = iGroundY - 0.5;
 
     vec3 col = backdrop(uv, A, t);
+    col += skyline(p, t, groundWorldY);
 
     // Ground line.
     float groundD = uv.y - iGroundY;
@@ -158,7 +227,7 @@ void main() {
     col = mix(col, vec3(0.02, 0.015, 0.02), smoothstep(0.0, -0.05, groundD));
 
     for (int i = 0; i < 6; i++) {
-        col += drawCity(p, iCityPos[i], iCityAlive[i] > 0.5, palette(iHue + float(i) * 0.06 + 0.1));
+        col += drawCity(p, iCityPos[i], iCityAlive[i] > 0.5, palette(iHue + float(i) * 0.06 + 0.1), float(i) * 13.0 + 1.0);
     }
     for (int i = 0; i < 3; i++) {
         col += drawBattery(p, iBatPos[i], iBatAlive[i] > 0.5, mix(vec3(0.3, 1.0, 0.6), palette(iHue + 0.4), 0.4));
@@ -217,10 +286,12 @@ class MissileCommand(BaseEffect):
         self._beat = 0.0
         self._flash = 0.0
         self._hue = float(self.rng.uniform(0.0, 1.0))
+        self._style = int(self.rng.integers(0, _NSTYLE))
+        self._style_timer = float(self.rng.uniform(24.0, 40.0))
 
-        self._city_x = [0.20 + 0.6 * i / (_NCITY - 1) for i in range(_NCITY)]
+        self._city_x = [0.08 + 0.84 * i / (_NCITY - 1) for i in range(_NCITY)]
         self._city_alive = [True] * _NCITY
-        self._bat_x = [0.06, 0.5, 0.94]
+        self._bat_x = [0.02, 0.5, 0.98]
         self._bat_alive = [True] * _NBAT
         self._bat_cd = [0.0] * _NBAT
 
@@ -254,6 +325,12 @@ class MissileCommand(BaseEffect):
             })
         self._hue = float((self._hue + self.rng.uniform(0.08, 0.2)) % 1.0)
         self._flash = max(self._flash, 0.4)
+
+    def _choose_style(self) -> None:
+        """Switch to a different cityscape scene style."""
+        choices = [s for s in range(_NSTYLE) if s != self._style]
+        self._style = int(self.rng.choice(choices))
+        self._style_timer = float(self.rng.uniform(24.0, 40.0))
 
     def _spawn_explosion(self, x: float, y: float) -> None:
         free = np.where(self._expl[:, 2] < 0.0)[0]
@@ -293,8 +370,13 @@ class MissileCommand(BaseEffect):
                     self._city_alive = [True] * _NCITY
                     self._bat_alive = [True] * _NBAT
                     self._flash = max(self._flash, 0.7)
+                    self._choose_style()
                 self._spawn_wave()
                 self._wave_timer = float(self.rng.uniform(2.0, 4.0))
+
+        self._style_timer -= dt
+        if self._style_timer <= 0.0:
+            self._choose_style()
 
         # advance enemy missiles
         for e in self._enemy:
@@ -377,9 +459,15 @@ class MissileCommand(BaseEffect):
                 return
 
     # ---------------------------------------------------------------- render
+    def _wpt(self, x: float, y: float, aspect: float) -> tuple[float, float]:
+        """Convert a [0,1]-fraction sim coordinate to the shader's centred,
+        aspect-scaled world space (matches ``p = (uv - 0.5) * vec2(A, 1.0)``)."""
+        return ((x - 0.5) * aspect, y - 0.5)
+
     def render(self) -> None:
         """Upload the battle state and draw the neon skyline."""
         p = self._prog
+        aspect = float(self.width) / max(float(self.height), 1.0)
         p['iTime'].value = float(self.time)
         p['iResolution'].value = (float(self.width), float(self.height))
         p['iBass'].value = self._bass
@@ -390,17 +478,20 @@ class MissileCommand(BaseEffect):
         p['iHue'].value = self._hue
         p['iGlitter'].value = max(0.0, float(self.parameters['glitter']))
         p['iGroundY'].value = self._GROUND_Y
+        p['iStyle'].value = self._style
 
-        p['iCityPos'].value = [(x, self._GROUND_Y) for x in self._city_x]
+        p['iCityPos'].value = [self._wpt(x, self._GROUND_Y, aspect) for x in self._city_x]
         p['iCityAlive'].value = [1.0 if a else 0.0 for a in self._city_alive]
-        p['iBatPos'].value = [(x, self._GROUND_Y) for x in self._bat_x]
+        p['iBatPos'].value = [self._wpt(x, self._GROUND_Y, aspect) for x in self._bat_x]
         p['iBatAlive'].value = [1.0 if a else 0.0 for a in self._bat_alive]
 
         efrom, eto, eprog = [], [], []
         for i in range(_NENEMY):
             if i < len(self._enemy) and self._enemy[i]['prog'] < 1.0 and not self._enemy[i].get('dead'):
                 e = self._enemy[i]
-                efrom.append(e['from']); eto.append(e['to']); eprog.append(float(e['prog']))
+                efrom.append(self._wpt(*e['from'], aspect))
+                eto.append(self._wpt(*e['to'], aspect))
+                eprog.append(float(e['prog']))
             else:
                 efrom.append((_OFF, _OFF)); eto.append((_OFF, _OFF)); eprog.append(-1.0)
         p['iEnemyFrom'].value = efrom
@@ -411,14 +502,20 @@ class MissileCommand(BaseEffect):
         for i in range(_NINTER):
             if i < len(self._inter):
                 m = self._inter[i]
-                ifrom.append(m['from']); ito.append(m['to']); iprog.append(float(m['prog']))
+                ifrom.append(self._wpt(*m['from'], aspect))
+                ito.append(self._wpt(*m['to'], aspect))
+                iprog.append(float(m['prog']))
             else:
                 ifrom.append((_OFF, _OFF)); ito.append((_OFF, _OFF)); iprog.append(-1.0)
         p['iInterFrom'].value = ifrom
         p['iInterTo'].value = ito
         p['iInterProg'].value = iprog
 
-        p['iExpl'].value = [tuple(map(float, e)) for e in self._expl]
+        p['iExpl'].value = [
+            (*self._wpt(float(e[0]), float(e[1]), aspect), float(e[2])) if e[2] >= 0.0
+            else (_OFF, _OFF, -1.0)
+            for e in self._expl
+        ]
 
         self._vao.render(moderngl.TRIANGLE_STRIP)
 
