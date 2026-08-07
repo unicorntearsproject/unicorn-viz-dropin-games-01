@@ -1,6 +1,6 @@
 # games-01 — Unicorn Viz effect pack
 
-**Version 0.13.0**
+**Version 0.13.1**
 
 
 arcade / game-like visuals: Breakout, Neon Pac, Galaga, Joust, Tetris,
@@ -9,6 +9,18 @@ Missile Command, Donkey Kong, Q*bert.
 Each effect subclasses `unicornviz.effects.base.BaseEffect` and is auto-discovered.
 
 ## Changelog
+
+- **0.13.1** — Q\*bert: characters now render at full opacity. Every sprite was
+  composited with `col += drawX(...)`, i.e. *added* to whatever was already
+  there, so the cube underneath showed through and washed the cast out. Each
+  character routine now tracks a coverage mask alongside its colour and returns
+  `vec4(rgb, coverage)`; `main()` composites with `mix()` so a character fully
+  replaces the pixel it covers. Highlights that sit inside an already-covered
+  body stay additive (they brighten without widening the silhouette), while
+  parts that extend past the body — Coily's tongue, Slick's hair tuft, the
+  disc's rim lights — carry their own coverage. The hero's death blink now
+  drops coverage too, so he flickers out instead of turning into a dark
+  silhouette.
 
 - **0.13.0** — Q\*bert 2.0. The whole cast was two ellipses: the hero was a
   plain orange blob with two dots for eyes and the single enemy was the same

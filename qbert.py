@@ -137,6 +137,14 @@ float segDist(vec2 p, vec2 a, vec2 b) {
     float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0);
     return length(pa - ba * h);
 }
+// Paint one sprite layer, tracking coverage alongside colour so characters can
+// be composited over the pyramid at full opacity instead of added to it (an
+// additive sprite lets the cube underneath show through and wash it out).
+void paint(inout vec3 o, inout float cov, vec3 c, float m) {
+    m = clamp(m, 0.0, 1.0);
+    o = mix(o, c, m);
+    cov = max(cov, m);
+}
 
 vec3 backdrop(vec2 uv, float A, float tb) {
     vec2 p = (uv - 0.5) * vec2(A, 1.0);
@@ -201,119 +209,125 @@ vec3 drawCube(vec2 qw, vec3 topCol, float glow, float tb, float seed, float hw) 
 }
 
 // Q*bert: orange, snout swings to the facing side, eyes track with it.
-vec3 drawQbert(vec2 q, float face, float hop, float tb) {
-    if (abs(q.x) > 0.062 || q.y < -0.012 || q.y > 0.095) return vec3(0.0);
+vec4 drawQbert(vec2 q, float face, float hop, float tb) {
+    if (abs(q.x) > 0.062 || q.y < -0.012 || q.y > 0.095) return vec4(0.0);
     vec3 orange = vec3(1.00, 0.52, 0.08);
     vec3 o = vec3(0.0);
+    float cov = 0.0;
     float squash = 1.0 - sin(hop * PI) * 0.12;   // stretches through the arc
 
     float feet = ell(q, vec2(-0.015, 0.007), vec2(0.013, 0.008), 0.004)
                + ell(q, vec2(0.015, 0.007), vec2(0.013, 0.008), 0.004);
-    o = mix(o, vec3(1.0, 0.78, 0.20), clamp(feet, 0.0, 1.0));
+    paint(o, cov, vec3(1.0, 0.78, 0.20), feet);
 
     float body = ell(q, vec2(0.0, 0.042), vec2(0.031, 0.033 * squash), 0.006);
-    o = mix(o, orange, body);
+    paint(o, cov, orange, body);
 
     // Signature tubular snout.
     vec2 sq = q - vec2(face * 0.028, 0.036);
-    o = mix(o, orange * 0.92, ell(sq, vec2(face * 0.006, 0.0), vec2(0.019, 0.010), 0.005));
-    o = mix(o, vec3(0.12, 0.05, 0.02),
-            ell(sq, vec2(face * 0.019, 0.0), vec2(0.006, 0.007), 0.003));
+    paint(o, cov, orange * 0.92, ell(sq, vec2(face * 0.006, 0.0), vec2(0.019, 0.010), 0.005));
+    paint(o, cov, vec3(0.12, 0.05, 0.02),
+          ell(sq, vec2(face * 0.019, 0.0), vec2(0.006, 0.007), 0.003));
 
     float eyes = ell(q, vec2(-0.011, 0.064), vec2(0.013, 0.014), 0.004)
                + ell(q, vec2(0.011, 0.064), vec2(0.013, 0.014), 0.004);
-    o = mix(o, vec3(1.0, 0.98, 0.95), clamp(eyes, 0.0, 1.0));
+    paint(o, cov, vec3(1.0, 0.98, 0.95), eyes);
     float pup = ell(q, vec2(-0.009 + face * 0.005, 0.062), vec2(0.006, 0.007), 0.002)
               + ell(q, vec2(0.013 + face * 0.005, 0.062), vec2(0.006, 0.007), 0.002);
-    o = mix(o, vec3(0.05, 0.02, 0.02), clamp(pup, 0.0, 1.0));
+    paint(o, cov, vec3(0.05, 0.02, 0.02), pup);
 
+    // Highlights ride on top of already-covered pixels, so they brighten the
+    // sprite without needing to extend its coverage.
     o += vec3(1.0) * ell(q, vec2(-0.013, 0.052), vec2(0.009, 0.007), 0.007) * 0.35;
-    // Masked by the body: an unmasked add here paints the sprite's whole
-    // bounding box as a visible rectangle over the pyramid.
     o += orange * body * 0.25 * (0.5 + 0.5 * sin(tb * 5.0));
-    return o;
+    return vec4(o, cov);
 }
 
 // Coily: purple coiled snake, or the egg he arrives in.
-vec3 drawCoily(vec2 q, float egg, float hop, float tb) {
-    if (abs(q.x) > 0.055 || q.y < -0.012 || q.y > 0.125) return vec3(0.0);
+vec4 drawCoily(vec2 q, float egg, float hop, float tb) {
+    if (abs(q.x) > 0.055 || q.y < -0.012 || q.y > 0.125) return vec4(0.0);
     vec3 purple = vec3(0.62, 0.18, 1.00);
     vec3 o = vec3(0.0);
+    float cov = 0.0;
     // The spring stretches out mid-hop and compresses on landing.
     float stretch = 1.0 + sin(hop * PI) * 0.35;
     if (egg > 0.5) {
-        o = mix(o, vec3(0.85, 0.80, 1.00),
-                ell(q, vec2(0.0, 0.030), vec2(0.022 / stretch, 0.028 * stretch), 0.005));
+        paint(o, cov, vec3(0.85, 0.80, 1.00),
+              ell(q, vec2(0.0, 0.030), vec2(0.022 / stretch, 0.028 * stretch), 0.005));
         o += vec3(0.5, 0.3, 1.0) * ell(q, vec2(-0.007, 0.040), vec2(0.008, 0.010), 0.006) * 0.5;
-        return o;
+        return vec4(o, cov);
     }
     // Coiled spring body — coils spread apart as it extends.
     for (int i = 0; i < 3; i++) {
         float fi = float(i);
         float wob = sin(tb * 6.0 + fi * 1.3) * 0.005;
-        o = mix(o, purple * (0.55 + fi * 0.16),
-                ell(q, vec2(wob, 0.012 + fi * 0.017 * stretch),
-                    vec2(0.027 - fi * 0.004, 0.011), 0.004));
+        paint(o, cov, purple * (0.55 + fi * 0.16),
+              ell(q, vec2(wob, 0.012 + fi * 0.017 * stretch),
+                  vec2(0.027 - fi * 0.004, 0.011), 0.004));
     }
     vec2 hq = q - vec2(sin(tb * 6.0 + 3.9) * 0.005, 0.080 + (stretch - 1.0) * 0.030);
-    o = mix(o, purple * 1.15, ell(hq, vec2(0.0, 0.0), vec2(0.025, 0.021), 0.005));
+    paint(o, cov, purple * 1.15, ell(hq, vec2(0.0, 0.0), vec2(0.025, 0.021), 0.005));
     float eyes = ell(hq, vec2(-0.010, 0.007), vec2(0.010, 0.011), 0.003)
                + ell(hq, vec2(0.010, 0.007), vec2(0.010, 0.011), 0.003);
-    o = mix(o, vec3(1.0), clamp(eyes, 0.0, 1.0));
-    o = mix(o, vec3(0.95, 0.06, 0.06),
-            ell(hq, vec2(-0.009, 0.006), vec2(0.005, 0.006), 0.002)
-          + ell(hq, vec2(0.011, 0.006), vec2(0.005, 0.006), 0.002));
-    // Forked tongue flicks in and out.
+    paint(o, cov, vec3(1.0), eyes);
+    paint(o, cov, vec3(0.95, 0.06, 0.06),
+          ell(hq, vec2(-0.009, 0.006), vec2(0.005, 0.006), 0.002)
+        + ell(hq, vec2(0.011, 0.006), vec2(0.005, 0.006), 0.002));
+    // Forked tongue flicks in and out — extends past the head, so it carries
+    // its own coverage.
     float flick = step(0.55, fract(tb * 2.2));
-    o += vec3(1.0, 0.12, 0.25) * flick
-       * smoothstep(0.0035, 0.0, segDist(hq, vec2(0.0, -0.012), vec2(0.0, -0.026)));
-    return o;
+    paint(o, cov, vec3(1.0, 0.12, 0.25), flick
+          * smoothstep(0.0035, 0.0, segDist(hq, vec2(0.0, -0.012), vec2(0.0, -0.026))));
+    return vec4(o, cov);
 }
 
 // Slick / Sam: little green cube-thief with a tuft of hair.
-vec3 drawSlick(vec2 q, float tb) {
-    if (abs(q.x) > 0.045 || q.y < -0.012 || q.y > 0.075) return vec3(0.0);
+vec4 drawSlick(vec2 q, float tb) {
+    if (abs(q.x) > 0.045 || q.y < -0.012 || q.y > 0.075) return vec4(0.0);
     vec3 green = vec3(0.30, 0.95, 0.25);
     vec3 o = vec3(0.0);
-    o = mix(o, green, ell(q, vec2(0.0, 0.028), vec2(0.023, 0.026), 0.005));
+    float cov = 0.0;
+    paint(o, cov, green, ell(q, vec2(0.0, 0.028), vec2(0.023, 0.026), 0.005));
     float eyes = ell(q, vec2(-0.008, 0.038), vec2(0.009, 0.010), 0.003)
                + ell(q, vec2(0.008, 0.038), vec2(0.009, 0.010), 0.003);
-    o = mix(o, vec3(1.0), clamp(eyes, 0.0, 1.0));
-    o = mix(o, vec3(0.05, 0.05, 0.05),
-            ell(q, vec2(-0.007, 0.037), vec2(0.004, 0.005), 0.002)
-          + ell(q, vec2(0.009, 0.037), vec2(0.004, 0.005), 0.002));
-    // Hair tuft waggles.
+    paint(o, cov, vec3(1.0), eyes);
+    paint(o, cov, vec3(0.05, 0.05, 0.05),
+          ell(q, vec2(-0.007, 0.037), vec2(0.004, 0.005), 0.002)
+        + ell(q, vec2(0.009, 0.037), vec2(0.004, 0.005), 0.002));
+    // Hair tuft waggles — sits outside the body, so it carries coverage.
     float w = sin(tb * 7.0) * 0.006;
-    o += green * 1.3 * smoothstep(0.005, 0.0,
-                                  segDist(q, vec2(0.0, 0.050), vec2(w, 0.066)));
-    return o;
+    paint(o, cov, green * 1.3, smoothstep(0.005, 0.0,
+                                          segDist(q, vec2(0.0, 0.050), vec2(w, 0.066))));
+    return vec4(o, cov);
 }
 
-vec3 drawBall(vec2 q, float tb) {
-    if (abs(q.x) > 0.030 || abs(q.y - 0.024) > 0.030) return vec3(0.0);
+vec4 drawBall(vec2 q, float tb) {
+    if (abs(q.x) > 0.030 || abs(q.y - 0.024) > 0.030) return vec4(0.0);
     float b = ell(q, vec2(0.0, 0.024), vec2(0.020, 0.020), 0.005);
-    vec3 o = vec3(1.0, 0.15, 0.12) * b;
+    vec3 o = vec3(1.0, 0.15, 0.12);
     o += vec3(1.0, 0.75, 0.7) * ell(q, vec2(-0.007, 0.031), vec2(0.007, 0.006), 0.005) * 0.8;
-    o += vec3(1.0, 0.2, 0.15) * b * (0.35 + 0.25 * sin(tb * 8.0));
-    return o;
+    o += vec3(1.0, 0.2, 0.15) * (0.35 + 0.25 * sin(tb * 8.0));
+    return vec4(o, b);
 }
 
 // Escape disc: a spinning neon platter parked beside the pyramid.
-vec3 drawDisc(vec2 q, float tb, float idx) {
-    if (abs(q.x) > 0.055 || abs(q.y) > 0.030) return vec3(0.0);
+vec4 drawDisc(vec2 q, float tb, float idx) {
+    if (abs(q.x) > 0.055 || abs(q.y) > 0.030) return vec4(0.0);
     vec3 o = vec3(0.0);
+    float cov = 0.0;
     float d = ell(q, vec2(0.0, 0.0), vec2(0.042, 0.014), 0.005);
     vec3 c = mix(vec3(0.30, 0.95, 1.00), palette(iHue + 0.35), 0.4);
-    o = mix(o, c * 0.7, d);
-    // Chasing rim lights.
+    paint(o, cov, c * 0.7, d);
+    // Chasing rim lights ride the rim, which can sit just outside the platter.
     for (int i = 0; i < 6; i++) {
         float fi = float(i);
         float a = fi / 6.0 * TAU + tb * 2.4 + idx * 1.7;
         vec2 lp = vec2(cos(a) * 0.036, sin(a) * 0.011);
-        o += c * smoothstep(0.007, 0.0, length(q - lp)) * (0.6 + iMid * 0.6);
+        float m = smoothstep(0.007, 0.0, length(q - lp));
+        paint(o, cov, c * (0.6 + iMid * 0.6) + c * 0.5, m);
     }
     o += c * d * 0.35;
-    return o;
+    return vec4(o, cov);
 }
 
 void main() {
@@ -344,28 +358,37 @@ void main() {
         col += drawCube(cq, cubeCol, glow, tb, cu.w * 7.0 + 1.0, iCubeHW);
     }
 
+    // Characters composite at full opacity over the pyramid — `col` is
+    // replaced where the sprite covers, so a cube never shows through a
+    // character. Painter's order: props first, cast last.
     float s = iSprite;
+    vec4 spr;
     for (int i = 0; i < 2; i++) {
         if (iDisc[i].z < 0.5) continue;
-        col += drawDisc((p - iDisc[i].xy) / s, tb, float(i));
+        spr = drawDisc((p - iDisc[i].xy) / s, tb, float(i));
+        col = mix(col, spr.rgb, spr.a);
     }
     for (int i = 0; i < 4; i++) {
         if (iBall[i].z < 0.5) continue;
-        col += drawBall((p - iBall[i].xy) / s, tb);
+        spr = drawBall((p - iBall[i].xy) / s, tb);
+        col = mix(col, spr.rgb, spr.a);
     }
     for (int i = 0; i < 2; i++) {
         if (iSlick[i].z < 0.5) continue;
-        col += drawSlick((p - iSlick[i].xy) / s, tb);
+        spr = drawSlick((p - iSlick[i].xy) / s, tb);
+        col = mix(col, spr.rgb, spr.a);
     }
 
     if (iCoilyAlive > 0.5) {
-        col += drawCoily((p - iCoilyPos) / s, iCoilyEgg, iCoilyHop, tb)
-             * (1.0 + iBeat * 0.3);
+        spr = drawCoily((p - iCoilyPos) / s, iCoilyEgg, iCoilyHop, tb);
+        col = mix(col, spr.rgb * (1.0 + iBeat * 0.3), spr.a);
     }
 
+    // Death blink drops coverage as well as colour, so the hero flickers out
+    // rather than turning into a dark silhouette.
     float heroVis = (iHeroHit > 0.5) ? step(0.5, fract(tb * 14.0)) : 1.0;
-    col += drawQbert((p - iHeroPos) / s, sign(iHeroFace + 0.001), iHeroHop, tb)
-         * heroVis * (1.0 + iMid * 0.2);
+    spr = drawQbert((p - iHeroPos) / s, sign(iHeroFace + 0.001), iHeroHop, tb);
+    col = mix(col, spr.rgb * (1.0 + iMid * 0.2), spr.a * heroVis);
     // Riding a disc throws off a bright escape halo.
     col += mix(vec3(0.4, 1.0, 1.0), palette(iHue + 0.3), 0.4) * iHeroRide
          * smoothstep(0.14, 0.0, length(p - iHeroPos - vec2(0.0, 0.04))) * 0.9;
