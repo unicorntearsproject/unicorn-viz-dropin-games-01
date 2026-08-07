@@ -1,6 +1,6 @@
 # games-01 — Unicorn Viz effect pack
 
-**Version 0.12.0**
+**Version 0.13.0**
 
 
 arcade / game-like visuals: Breakout, Neon Pac, Galaga, Joust, Tetris,
@@ -9,6 +9,54 @@ Missile Command, Donkey Kong, Q*bert.
 Each effect subclasses `unicornviz.effects.base.BaseEffect` and is auto-discovered.
 
 ## Changelog
+
+- **0.13.0** — Q\*bert 2.0. The whole cast was two ellipses: the hero was a
+  plain orange blob with two dots for eyes and the single enemy was the same
+  blob in purple — no snout, no Coily, none of the arcade cast.
+
+  **Characters**, each a real actor in the simulation rather than set dressing:
+  - **Q\*bert** — orange, with the signature tubular snout that swings to
+    whichever side he is hopping toward, big eyes whose pupils track with it,
+    feet, and a body that stretches through the hop arc.
+  - **Coily** — arrives as an egg at the apex, bounces blindly downward, then
+    hatches into the purple snake: a coiled spring body whose coils spread
+    apart mid-hop and compress on landing, a head that rides the stretch, and
+    a forked tongue that flicks. Once hatched he hunts Q\*bert directly.
+  - **Red balls** — bounce down the pyramid on their own and kill on contact.
+  - **Slick & Sam** — little green cube-thieves with waggling hair tufts that
+    hop downward *un-colouring* finished cubes (241 cubes stolen back across a
+    300s sim), so a course can be actively undone while it is being solved.
+  - **Flying discs** — one either side. With Coily adjacent, Q\*bert leaps to a
+    disc, Coily dives off after him, and the disc is spent (20 escapes/300s).
+
+  **Six courses**, cycled without immediate repeats, in three rulesets:
+  `once` (one hop per cube), `two` (two visits through an intermediate
+  colour), and `toggle` (landing flips a cube back off, so the AI has to avoid
+  undoing its own work). Pyramids run 5–8 rows, each with its own cube palette
+  so a switch is unmistakable. The lattice is sized per row count and the
+  occupied band — including the character standing on the apex — is centred,
+  verified to fit at both 16:9 and 4:3 for every course. Cube and character
+  scale now follow the course size instead of being hard-coded.
+
+  **Beat pulse** — every beat sends a wave down the pyramid, lifting and
+  flaring cubes in sequence from the apex outward. The lift is computed once
+  on the CPU and baked into the uploaded cube position, then applied to
+  whatever is standing on that row, so characters ride the wave with their
+  platform instead of detaching from it.
+
+  **Drip** — cubes redrawn as proper isometric solids with a glossy sweep
+  across the top face, a neon rim on the diamond outline, and neon paint
+  running down the side faces (treble-reactive).
+
+  Caught three rendering bugs during the build, all the same class — an
+  unmasked additive term painting a sprite's rectangular bounding box over
+  the scene: Q\*bert's ambient glow, and the pulse-wave glow in the cube loop
+  (which banded whole rows). Also caught `iCoilyHop` declared and assigned but
+  never referenced in the shader — the exact crash-on-load pattern that hit
+  Wingsuit Dive and Sun Ship 3000 — and wired it into Coily's hop stretch.
+  Verified with per-course renders, a high-iTime stress test, and a 300s sim
+  exercising all six courses, all three rulesets, 21 hatches, 14 deaths, and
+  20 disc escapes.
 
 - **0.12.0** — Donkey Kong 2.0, Tetris 2.0, and a Missile Command bug sweep.
 
