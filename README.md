@@ -1,6 +1,6 @@
 # games-01 — Unicorn Viz effect pack
 
-**Version 0.11.1**
+**Version 0.12.0**
 
 
 arcade / game-like visuals: Breakout, Neon Pac, Galaga, Joust, Tetris,
@@ -9,6 +9,81 @@ Missile Command, Donkey Kong, Q*bert.
 Each effect subclasses `unicornviz.effects.base.BaseEffect` and is auto-discovered.
 
 ## Changelog
+
+- **0.12.0** — Donkey Kong 2.0, Tetris 2.0, and a Missile Command bug sweep.
+
+  **Donkey Kong 2.0** — the cast was the problem: the hero stood 0.49 world
+  units tall (half the screen height, spanning three girder gaps), and Kong
+  was drawn with his feet on the top girder at y≈0.43 so his head sat at
+  y≈0.73 when the visible range ends at 0.5 — he was rendered every frame,
+  entirely off-screen, which is why there appeared to be no Kong at all.
+  - Hero rebuilt at ~0.10 units as a real sprite: cap with a brim, moustache,
+    overalls with straps, boots, swinging arms and a gait that changes
+    between walking and climbing.
+  - Kong rebuilt at ~0.175 units and repositioned to fit: fur body, pale
+    chest patch that swells on the beat, muzzle, nostrils, brow, tracking
+    eyes, an idle arm that pounds his chest while raging and a throwing arm
+    that winds up and over for every barrel.
+  - Added a damsel on the far end of the top girder (waving for help), a
+    burning oil drum where barrels retire, and victory hearts that rise
+    between the pair when the hero tops out.
+  - Added a hammer power-up: it appears on a girder, the hero detours to
+    grab it, and while it is up he hunts barrels and smashes them into spark
+    bursts instead of dying. Classic rule kept — no climbing while carrying
+    it, so taking it is a genuine trade-off the AI makes.
+  - Barrels now sometimes take a ladder down instead of always rolling to
+    the end, and a quarter of them are flaming variants.
+  - Fixed the rig only spanning x∈[-0.55,0.55] while a 16:9 screen spans
+    ±0.89 — the same width bug found in Missile Command. The simulation now
+    keeps x as a screen fraction and converts at upload, so the girders
+    reach both edges at any aspect ratio.
+  - Fixed the ladders rendering as solid slabs: the rung mask subtracted a
+    constant inside `smoothstep`, lighting ~80% of each cell instead of
+    drawing a thin line.
+
+  **Tetris 2.0** — it was slow because gravity ran at 1.6 cells/sec, so a
+  piece took ~12s to cross the well. Rebuilt around fast alignment plus a
+  hard drop: the AI snaps to its planned rotation/column at 26 steps/sec,
+  pauses briefly, then slams the piece down. Measured 3.4 pieces/sec (was
+  well under one), 74 lines in 60 seconds.
+  - Every drop leaves streak trails down the columns it fell through and
+    lands with a shockwave ring and a screen-shake kick.
+  - Line clears fire a horizontal disintegration beam across each full row
+    before it collapses.
+  - Added a level counter driving gravity, shown as a lit segment ladder
+    beside the well, and top-out detection — a jammed board now detonates
+    and restarts instead of silently stacking forever.
+  - Futuristic presentation: receding perspective grid and falling data-rain
+    behind the well, corner brackets and a travelling scan line on the
+    frame, next-piece hologram panel, and blocks redrawn as bevelled shells
+    around a pulsing energy core with a travelling scanline.
+
+  **Missile Command** — three real bugs:
+  - Batteries fired at missiles that were not on screen yet. Wave members
+    spawn with a negative `prog` so they stagger in, but `_current_pos`
+    clamps prog to 0, so an unlaunched missile still reported a position at
+    its spawn altitude and the targeting scan happily led it. Targeting now
+    runs off a visible-only list; verified 0 such shots across a 180s sim
+    (previously routine).
+  - Buildings did not visibly die when hit — a destroyed city kept its full
+    silhouette and merely changed colour. Cities now actually come down:
+    each building collapses to a jagged chewed-off stub, the ground craters
+    and scorches, embers wink in the wreckage and smoke drifts up. The
+    background skyline was also drawing *taller* than the defended cities
+    (0.14 vs 0.052), hiding the wreckage behind it; it is now clearly
+    shorter so a levelled city reads instantly.
+  - Cityscape scenes changed too rarely — the timer is now 10–18s (was
+    24–40s), giving 13 scene changes per 180s instead of ~5.
+  - Added UFOs: saucers with domes and chasing rim lights drift in from
+    either edge, bomb the ground line as they pass, are targeted by the
+    batteries (led along their drift), and burst when caught in a blast.
+
+  All three verified with real offscreen renders across quiet/moderate/
+  loud-beat audio, a high-iTime stress test, and headless simulations
+  confirming actual gameplay rather than just "doesn't crash" — Donkey Kong:
+  31 climbs completed, 11 hammer grabs, 13 barrels taking ladders; Tetris:
+  204 hard drops, level 10 reached, no top-outs; Missile Command: 12 cities
+  destroyed, 20 UFOs, 27 bombs dropped, 0 off-screen shots.
 
 - **0.11.1** — Missile Command: a plain uniform draw of the 4 cityscape
   styles on activation had a 1-in-4 chance of repeating whatever style the

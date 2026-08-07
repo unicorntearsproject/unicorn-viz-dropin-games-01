@@ -41,6 +41,7 @@ _NBAT = 3
 _NENEMY = 14
 _NINTER = 9
 _NEXPL = 10
+_NUFO = 3
 _NSTYLE = 4  # 0 classic neon, 1 chrome spires, 2 circuit ruins, 3 drip fade
 _OFF = 1000.0
 
@@ -78,6 +79,7 @@ uniform vec2  iInterFrom[9];
 uniform vec2  iInterTo[9];
 uniform float iInterProg[9];    // <0 inactive
 uniform vec3  iExpl[10];        // (x, y, age); age<0 inactive, radius derived from age
+uniform vec4  iUfo[3];          // (x, y, alive, driftPhase)
 in  vec2 v_uv;
 out vec4 fragColor;
 
@@ -118,7 +120,10 @@ vec3 skyline(vec2 p, float t, float groundWorldY) {
         float id = floor(px);
         float fx = fract(px);
         float h = hash21(vec2(id, fl * 3.7 + float(iStyle) * 9.1));
-        float bh = groundWorldY + (0.04 + h * (0.10 - fl * 0.035));
+        // Deliberately shorter than the six defended cities below: this is a
+        // distant backdrop, and if it out-tops them a levelled city stays
+        // hidden behind it and the hit reads as though nothing happened.
+        float bh = groundWorldY + (0.016 + h * (0.042 - fl * 0.012));
         float edge = smoothstep(0.0, 0.01, fx) * smoothstep(1.0, 0.99, fx);
         float mask = edge * step(groundWorldY, p.y) * step(p.y, bh);
         vec3 hueCol = palette(iHue + h * 0.18 + fl * 0.08 + float(iStyle) * 0.05);
@@ -160,34 +165,89 @@ float dripStreaks(vec2 q, float bh, float seed, float t) {
     return smoothstep(0.006, 0.0, d) * smoothstep(dripY - len, dripY, q.y) * step(q.y, bh);
 }
 
-vec3 drawCity(vec2 p, vec2 pos, bool alive, vec3 col, float seed) {
+// A city block. When destroyed the towers actually come down: each building
+// collapses to a jagged, chewed-off stub, the ground under it is cratered and
+// scorched, embers wink in the wreckage and smoke drifts up. Recolouring an
+// intact skyline (what this used to do) read as "nothing happened" — the
+// silhouette has to change for a hit to land visually.
+vec3 drawCity(vec2 p, vec2 pos, bool alive, vec3 col, float seed, float tb) {
     vec2 q = p - pos;
-    if (abs(q.x) > 0.075 || q.y < -0.005 || q.y > 0.075) return vec3(0.0);
+    if (abs(q.x) > 0.075 || q.y < -0.020 || q.y > 0.100) return vec3(0.0);
     float bld = 0.0;
     float topY = 0.0;
     for (int i = -3; i <= 3; i++) {
         float bx = float(i) * 0.019;
-        float bh = 0.022 + 0.030 * hash21(vec2(seed + float(i), 3.0));
+        float bhFull = 0.032 + 0.046 * hash21(vec2(seed + float(i), 3.0));
         float bw = 0.008 + 0.004 * hash21(vec2(seed + float(i), 7.0));
-        float m = step(abs(q.x - bx), bw) * step(q.y, bh);
+        float bh = bhFull;
+        if (!alive) {
+            // Collapsed stub with a torn-off top edge.
+            float stub = 0.004 + 0.011 * hash21(vec2(seed + float(i), 11.0));
+            float jag = 0.6 + 0.8 * hash21(vec2(floor(q.x * 190.0), seed + 17.0));
+            bh = stub * jag;
+            bw *= 0.85 + 0.3 * hash21(vec2(seed + float(i), 23.0));
+        }
+        float m = step(abs(q.x - bx), bw) * step(q.y, bh) * step(-0.002, q.y);
         bld = max(bld, m);
         topY = max(topY, bh * m);
     }
-    float pulse = alive ? (0.8 + 0.4 * sin(iTime * 2.0 + pos.x * 10.0)) : 1.0;
-    vec3 c = (alive ? col * pulse : vec3(0.12, 0.05, 0.04)) * bld;
+
+    if (!alive) {
+        vec3 c = vec3(0.14, 0.06, 0.05) * bld;
+        // Scorched crater dished into the ground line.
+        float crater = smoothstep(0.062, 0.0, abs(q.x)) * smoothstep(0.002, -0.016, q.y);
+        c += vec3(0.30, 0.09, 0.03) * crater;
+        // Embers winking through the rubble.
+        float ember = hash21(floor(vec2(q.x * 110.0, tb * 3.0)));
+        c += vec3(1.0, 0.38, 0.07) * step(0.955, ember) * bld * 1.6;
+        // Smoke drifting off the wreck.
+        float sm = hash21(floor(vec2(q.x * 45.0 + tb * 0.6, (q.y - tb * 0.09) * 45.0)));
+        c += vec3(0.20, 0.18, 0.20) * step(0.72, sm)
+           * smoothstep(0.085, 0.010, q.y) * step(0.008, q.y) * 0.7;
+        return c;
+    }
+
+    float pulse = 0.8 + 0.4 * sin(iTime * 2.0 + pos.x * 10.0);
+    vec3 c = col * pulse * bld;
     float winRow = floor(q.y * 90.0);
     float winCol = floor((q.x + 0.06) * 140.0);
     float winH = hash21(vec2(winCol, winRow + seed * 5.0));
     float win = step(0.55, winH) * bld * step(0.0, q.y);
-    c += (alive ? vec3(1.0, 0.85, 0.5) : vec3(0.3, 0.1, 0.05))
-       * win * (0.4 + 0.3 * sin(iTime * 2.5 + winH * 30.0));
-    if (alive && iStyle == 1) {
+    c += vec3(1.0, 0.85, 0.5) * win * (0.4 + 0.3 * sin(iTime * 2.5 + winH * 30.0));
+    if (iStyle == 1) {
         float spire = smoothstep(0.004, 0.0, abs(q.x)) * step(topY, q.y) * step(q.y, topY + 0.02);
         c += vec3(0.8, 0.95, 1.0) * spire * 1.5;
     }
-    if (alive && (iStyle == 1 || iStyle == 3)) {
+    if (iStyle == 1 || iStyle == 3) {
         c += col * dripStreaks(q + vec2(0.06, 0.0), topY, seed, iTime) * 1.3;
     }
+    return c;
+}
+
+// Incoming saucer: hull, glass dome, and a ring of blinking lights.
+vec3 drawUfo(vec2 p, vec4 u, float tb) {
+    if (u.z < 0.5) return vec3(0.0);
+    vec2 q = p - u.xy;
+    if (abs(q.x) > 0.06 || abs(q.y) > 0.035) return vec3(0.0);
+    vec3 c = vec3(0.0);
+    float hull = smoothstep(0.006, -0.004, length(q / vec2(0.045, 0.013)) - 1.0);
+    c = mix(c, vec3(0.55, 0.62, 0.75), hull);
+    float dome = smoothstep(0.005, -0.003, length((q - vec2(0.0, 0.010)) / vec2(0.019, 0.016)) - 1.0)
+               * step(0.008, q.y);
+    c = mix(c, vec3(0.35, 1.0, 0.85), dome);
+    c += vec3(0.2, 0.9, 0.7) * dome * 0.6;
+    // Rim lights chase around the hull.
+    for (int i = 0; i < 5; i++) {
+        float fi = float(i);
+        float lx = (fi - 2.0) * 0.018;
+        float blink = 0.5 + 0.5 * sin(tb * 7.0 + fi * 1.6 + u.w);
+        c += vec3(1.0, 0.35, 0.5) * blink
+           * smoothstep(0.006, 0.0, length(q - vec2(lx, -0.006)));
+    }
+    // Abduction glow underneath.
+    c += vec3(0.3, 1.0, 0.8) * hull * 0.25;
+    c += vec3(0.25, 0.9, 0.7)
+       * smoothstep(0.030, 0.0, length(q - vec2(0.0, -0.016))) * 0.5;
     return c;
 }
 
@@ -216,6 +276,7 @@ void main() {
     vec2 uv = v_uv;
     vec2 p = (uv - 0.5) * vec2(A, 1.0);
     float t = iTime;
+    float tb = mod(t, 600.0);   // bounded time for floor()/hash() use
     float groundWorldY = iGroundY - 0.5;
 
     vec3 col = backdrop(uv, A, t);
@@ -227,7 +288,11 @@ void main() {
     col = mix(col, vec3(0.02, 0.015, 0.02), smoothstep(0.0, -0.05, groundD));
 
     for (int i = 0; i < 6; i++) {
-        col += drawCity(p, iCityPos[i], iCityAlive[i] > 0.5, palette(iHue + float(i) * 0.06 + 0.1), float(i) * 13.0 + 1.0);
+        col += drawCity(p, iCityPos[i], iCityAlive[i] > 0.5,
+                        palette(iHue + float(i) * 0.06 + 0.1), float(i) * 13.0 + 1.0, tb);
+    }
+    for (int i = 0; i < 3; i++) {
+        col += drawUfo(p, iUfo[i], tb);
     }
     for (int i = 0; i < 3; i++) {
         col += drawBattery(p, iBatPos[i], iBatAlive[i] > 0.5, mix(vec3(0.3, 1.0, 0.6), palette(iHue + 0.4), 0.4));
@@ -295,7 +360,7 @@ class MissileCommand(BaseEffect):
         style_choices = [s for s in range(_NSTYLE) if s != MissileCommand._last_style]
         self._style = int(self.rng.choice(style_choices))
         MissileCommand._last_style = self._style
-        self._style_timer = float(self.rng.uniform(24.0, 40.0))
+        self._style_timer = float(self.rng.uniform(10.0, 18.0))
 
         self._city_x = [0.08 + 0.84 * i / (_NCITY - 1) for i in range(_NCITY)]
         self._city_alive = [True] * _NCITY
@@ -307,13 +372,28 @@ class MissileCommand(BaseEffect):
         self._inter = []      # list of dict: from,to,prog,speed,target_enemy
         self._expl = np.full((_NEXPL, 3), -1.0, dtype=np.float32)
 
+        self._ufos: list[dict] = []
+        self._ufo_cd = float(self.rng.uniform(3.0, 8.0))
+
         self._wave = 0
         self._wave_timer = float(self.rng.uniform(0.5, 1.5))
         self._spawn_cd = 0.0
 
     # ------------------------------------------------------------- helpers
     def _alive_enemies(self):
+        """Every undetonated missile, including ones still queued to launch."""
         return [e for e in self._enemy if e['prog'] < 1.0 and not e.get('dead')]
+
+    def _visible_enemies(self):
+        """Only missiles actually on screen.
+
+        Wave members spawn with a negative ``prog`` so they stagger in, and
+        ``drawTrail`` skips those — but ``_current_pos`` clamps prog to 0, so
+        they still report a position up at their launch point. Targeting off
+        this list is what made the batteries fire at nothing: they were leading
+        missiles that had not appeared yet.
+        """
+        return [e for e in self._alive_enemies() if e['prog'] >= 0.0]
 
     def _spawn_wave(self) -> None:
         self._wave += 1
@@ -321,11 +401,7 @@ class MissileCommand(BaseEffect):
         self._enemy = []
         for _ in range(n):
             fx = float(self.rng.uniform(0.05, 0.95))
-            targets = [self._city_x[i] for i in range(_NCITY) if self._city_alive[i]]
-            targets += [self._bat_x[i] for i in range(_NBAT) if self._bat_alive[i]]
-            if not targets:
-                targets = list(self._city_x)
-            tx = float(self.rng.choice(targets))
+            tx = float(self.rng.choice(self._live_targets()))
             self._enemy.append({
                 'from': (fx, 0.98), 'to': (tx, self._GROUND_Y),
                 'prog': float(self.rng.uniform(-1.5, 0.0)),
@@ -339,12 +415,49 @@ class MissileCommand(BaseEffect):
         choices = [s for s in range(_NSTYLE) if s != self._style]
         self._style = int(self.rng.choice(choices))
         MissileCommand._last_style = self._style
-        self._style_timer = float(self.rng.uniform(24.0, 40.0))
+        self._style_timer = float(self.rng.uniform(10.0, 18.0))
 
     def _spawn_explosion(self, x: float, y: float) -> None:
         free = np.where(self._expl[:, 2] < 0.0)[0]
         slot = int(free[0]) if free.size else int(np.argmax(self._expl[:, 2]))
         self._expl[slot] = (x, y, 0.0)
+
+    def _live_targets(self) -> list[float]:
+        """Ground x positions still worth attacking."""
+        t = [self._city_x[i] for i in range(_NCITY) if self._city_alive[i]]
+        t += [self._bat_x[i] for i in range(_NBAT) if self._bat_alive[i]]
+        return t or list(self._city_x)
+
+    def _update_ufos(self, dt: float, tempo: float) -> None:
+        """Drift saucers across the sky; they bomb the ground line as they go."""
+        self._ufo_cd -= dt
+        if self._ufo_cd <= 0.0 and len(self._ufos) < _NUFO:
+            from_left = bool(self.rng.random() < 0.5)
+            speed = float(self.rng.uniform(0.07, 0.13))
+            self._ufos.append({
+                'x': -0.10 if from_left else 1.10,
+                'y': float(self.rng.uniform(0.55, 0.86)),
+                'vx': speed if from_left else -speed,
+                'bomb_cd': float(self.rng.uniform(0.7, 1.8)),
+                'phase': float(self.rng.uniform(0.0, 6.28)),
+            })
+            self._ufo_cd = float(self.rng.uniform(6.0, 14.0))
+
+        for u in list(self._ufos):
+            u['x'] += u['vx'] * dt * tempo
+            if u['x'] < -0.18 or u['x'] > 1.18:
+                self._ufos.remove(u)
+                continue
+            u['bomb_cd'] -= dt
+            if u['bomb_cd'] <= 0.0 and len(self._enemy) < _NENEMY:
+                tx = float(self.rng.choice(self._live_targets()))
+                self._enemy.append({
+                    'from': (float(u['x']), float(u['y'])),
+                    'to': (tx, self._GROUND_Y),
+                    'prog': 0.0,
+                    'speed': float(self.rng.uniform(0.16, 0.26)),
+                })
+                u['bomb_cd'] = float(self.rng.uniform(1.6, 3.2))
 
     def _fire_interceptor(self, battery_idx: int, target: tuple[float, float]) -> None:
         if len(self._inter) >= _NINTER:
@@ -402,13 +515,16 @@ class MissileCommand(BaseEffect):
             self._bat_cd[bi] = max(0.0, self._bat_cd[bi] - dt)
             if not self._bat_alive[bi] or self._bat_cd[bi] > 0.0:
                 continue
-            threats = self._alive_enemies()
-            if not threats:
+            # Only shoot at things that are actually on screen — missiles that
+            # have launched, and saucers (led a little along their drift).
+            aim: list[tuple[float, float]] = [self._predict(e)
+                                              for e in self._visible_enemies()]
+            aim += [(float(u['x'] + u['vx'] * 0.4), float(u['y'])) for u in self._ufos]
+            if not aim:
                 continue
             bx = self._bat_x[bi]
-            nearest = min(threats, key=lambda e: abs(self._current_x(e) - bx))
-            predicted = self._predict(nearest)
-            self._fire_interceptor(bi, predicted)
+            target = min(aim, key=lambda pt: abs(pt[0] - bx))
+            self._fire_interceptor(bi, target)
             self._bat_cd[bi] = float(self.rng.uniform(0.5, 1.1)) / (1.0 + self._mid * 0.6)
 
         # advance interceptors, detonate on arrival
@@ -424,18 +540,24 @@ class MissileCommand(BaseEffect):
                 continue
             ex, ey = float(self._expl[i, 0]), float(self._expl[i, 1])
             radius = 0.02 + float(self._expl[i, 2]) * 0.16
-            for e in self._alive_enemies():
+            for e in self._visible_enemies():
                 hx, hy = self._current_pos(e)
                 if (hx - ex) ** 2 + (hy - ey) ** 2 < radius * radius:
                     e['dead'] = True
                     self._spawn_explosion(hx, hy)
                     self._flash = max(self._flash, 0.15)
+            for u in list(self._ufos):
+                if (u['x'] - ex) ** 2 + (u['y'] - ey) ** 2 < radius * radius:
+                    self._spawn_explosion(float(u['x']), float(u['y']))
+                    self._ufos.remove(u)
+                    self._flash = max(self._flash, 0.45)
 
         # age explosions
         act = self._expl[:, 2] >= 0.0
         self._expl[act, 2] += dt * 2.2
         self._expl[self._expl[:, 2] > 1.0] = -1.0
 
+        self._update_ufos(dt, tempo)
         self._spawn_cd = max(0.0, self._spawn_cd - dt)
 
     def _current_x(self, e: dict) -> float:
@@ -525,6 +647,16 @@ class MissileCommand(BaseEffect):
             else (_OFF, _OFF, -1.0)
             for e in self._expl
         ]
+
+        ufo_val = []
+        for i in range(_NUFO):
+            if i < len(self._ufos):
+                u = self._ufos[i]
+                ux, uy = self._wpt(float(u['x']), float(u['y']), aspect)
+                ufo_val.append((ux, uy, 1.0, float(u['phase'])))
+            else:
+                ufo_val.append((_OFF, _OFF, 0.0, 0.0))
+        p['iUfo'].value = ufo_val
 
         self._vao.render(moderngl.TRIANGLE_STRIP)
 
