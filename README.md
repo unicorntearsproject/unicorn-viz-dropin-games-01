@@ -1,6 +1,6 @@
 # games-01 — Unicorn Viz effect pack
 
-**Version 0.13.1**
+**Version 0.13.2**
 
 
 arcade / game-like visuals: Breakout, Neon Pac, Galaga, Joust, Tetris,
@@ -9,6 +9,18 @@ Missile Command, Donkey Kong, Q*bert.
 Each effect subclasses `unicornviz.effects.base.BaseEffect` and is auto-discovered.
 
 ## Changelog
+
+- **0.13.2** — killed the "ASCII dots": the regular grid of tiny marks visible
+  across Donkey Kong, Galaga, Joust, Missile Command, Neon Pac, Q\*bert and
+  Tetris. Every one used the sparkle idiom
+  `hash21(floor(frag * 0.5) + floor(t * 20.0))`, which feeds a term reaching
+  ~200000 into a hash whose first multiply is x123.34 — past float32's usable
+  mantissa, so the "random" field collapses into a fixed lattice. Measured
+  over a 40x40 patch: **1197 distinct values at t=0, 15 at t=600s, and 1 at
+  t=10000** — and since `self.time` starts at a random value up to 10000,
+  essentially every instance ran with a completely dead sparkle. `hash21` now
+  wraps its input first (`mod(p, 512.0)`), restoring 1234/1600 distinct values
+  at t=10000. One line per file; no visual design changed.
 
 - **0.13.1** — Q\*bert: characters now render at full opacity. Every sprite was
   composited with `col += drawX(...)`, i.e. *added* to whatever was already

@@ -124,6 +124,12 @@ out vec4 fragColor;
 #define TAU 6.28318530
 
 float hash21(vec2 p) {
+    // Bound the input before hashing. Callers add a time term such as
+    // floor(t * 20.0); with self.time starting anywhere up to 10000 that
+    // reaches ~200000, and the multiply below (x123.34) then lands past
+    // float32's usable mantissa -- the field collapses from noise into a
+    // fixed lattice, which renders as a regular grid of dots.
+    p = mod(p, 512.0);
     p = fract(p * vec2(123.34, 456.21));
     p += dot(p, p + 45.32);
     return fract(p.x * p.y);
