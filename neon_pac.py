@@ -507,8 +507,16 @@ void main() {
     // ---- post: eat-sparkle, danger flash, glitter, vignette ----
     col += palette(iHue + 0.5) * iFlash * 0.18;
     col += vec3(1.0, 0.08, 0.08) * iDeath * 0.45;
-    float sp = hash21(floor(frag * 0.5) + floor(t * 20.0));
-    col += vec3(0.85, 0.92, 1.0) * step(0.994, sp) * (0.35 + iTreble * 0.9) * iGlitter;
+    // Sparkle: a round mote placed inside its cell. A bare threshold fills
+    // the whole cell instead, which is what reads as hard little squares.
+    vec2 spc = frag * 0.25;
+    vec2 spg = floor(spc) + floor(t * 20.0);
+    float sp = hash21(spg);
+    if (sp > 0.985) {
+        vec2 spd = fract(spc) - vec2(hash21(spg + 2.7), hash21(spg + 6.1));
+        col += vec3(0.85, 0.92, 1.0) * exp(-dot(spd, spd) * 30.0)
+             * (0.35 + iTreble * 0.9) * iGlitter;
+    }
     float vig = smoothstep(1.32, 0.18, length(uv - 0.5));
     col *= vig;
     col += palette(iHue + 0.2) * iBeat * 0.05 * (1.0 - vig);

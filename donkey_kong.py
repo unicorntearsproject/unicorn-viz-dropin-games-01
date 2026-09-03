@@ -29,6 +29,8 @@ hammer timers, and ``self.time`` — no two runs look or play alike from frame 0
 """
 from __future__ import annotations
 
+import math
+
 import moderngl
 import numpy as np
 
@@ -73,6 +75,7 @@ uniform float iHeroHammer;    // >0 while the hammer is held
 uniform vec2  iKongPos;       // Kong FEET position
 uniform float iKongThrow;     // 0..1 throw-arm swing envelope
 uniform float iKongRage;      // 0..1 chest-beat envelope
+uniform float iKongPound;     // chest-drum phase, radians, CPU-integrated
 uniform vec2  iDamselPos;     // damsel FEET position
 uniform vec2  iOilPos;        // oil-drum base
 uniform vec2  iBarrelPos[8];
@@ -118,10 +121,17 @@ vec3 backdrop(vec2 uv, float A, float t) {
     vec3 col = palette(v * 0.08 + iHue + 0.6 + t * 0.014);
     col *= col;
     col *= 0.05 + 0.05 * (v * 0.5 + 0.5);
-    float sh = hash21(floor(uv * vec2(A, 1.0) * 100.0));
+    // Stars: a soft round point placed inside its cell. Filling the whole cell
+    // instead -- a bare threshold on the cell hash -- is what renders as a
+    // field of hard little squares.
+    vec2 scell = p * 100.0;
+    vec2 sg = floor(scell);
+    float sh = hash21(sg);
     if (sh > 0.972) {
+        vec2 sd = fract(scell) - vec2(hash21(sg + 5.3), hash21(sg + 9.1));
         float tw = 0.5 + 0.5 * sin(t * (2.0 + sh * 6.0) + sh * 40.0);
-        col += vec3(0.6, 0.7, 0.9) * tw * (0.3 + iTreble * 0.4);
+        col += vec3(0.6, 0.7, 0.9) * exp(-dot(sd, sd) * 26.0)
+             * tw * (0.35 + iTreble * 0.45);
     }
     return col;
 }
@@ -201,6 +211,17 @@ vec3 drawHero(vec2 q, float face, float climb, float hammer, float t) {
     return col;
 }
 
+// One jointed arm: shoulder -> elbow -> fist, as two segments plus a knuckle.
+// Angles are measured CCW from +x, so a pose is stated as where the upper arm
+// and the forearm each point, and the elbow flexes between them.
+float kongArm(vec2 q, vec2 sh, float t0, float t1, float r) {
+    vec2 el = sh + 0.030 * vec2(cos(t0), sin(t0));
+    vec2 fi = el + 0.028 * vec2(cos(t1), sin(t1));
+    float d = min(segDist(q, sh, el), segDist(q, el, fi));
+    return clamp(smoothstep(r, r * 0.40, d)
+               + smoothstep(r * 1.35, r * 0.50, length(q - fi)), 0.0, 1.0);
+}
+
 // Kong: FEET at q=(0,0), ~0.175 tall, half-width ~0.095.
 vec3 drawKong(vec2 q, float throwT, float rage) {
     if (abs(q.x) > 0.16 || q.y < -0.01 || q.y > 0.22) return vec3(0.0);
@@ -217,16 +238,23 @@ vec3 drawKong(vec2 q, float throwT, float rage) {
     col = mix(col, pale * (1.0 + rage * 0.5),
               ell(q, vec2(0.0, 0.078), vec2(0.046 * beatPuff, 0.034 * beatPuff), 0.008));
 
-    // Idle arm pounds the chest while raging; throw arm winds up and over.
-    float pound = rage * sin(iTime * 26.0) * 0.016;
-    float armL = smoothstep(0.014, 0.0,
-                            segDist(q, vec2(-0.062, 0.105), vec2(-0.030 + pound, 0.062)));
-    col = mix(col, fur * 0.95, armL);
+    // Both arms drum the chest, in antiphase. The drum phase is integrated on
+    // the CPU -- audio modulates its *rate*, never its value -- so the motion
+    // stays continuous through a beat re-trigger instead of jump-cutting, and
+    // the fist travels an up-and-down arc off a flexing elbow rather than the
+    // end of one stick sliding sideways.
+    float drum = 0.5 - 0.5 * cos(iKongPound);
+    float aL0 = mix(-0.50, -1.00, drum);
+    float aL1 = mix( 0.75,  0.05, drum);
+    col = mix(col, fur * 0.95, kongArm(q, vec2(-0.062, 0.105), aL0, aL1, 0.013));
 
-    float lift = sin(clamp(throwT, 0.0, 1.0) * PI);
-    vec2 aq = rot(-lift * 1.5) * (q - vec2(0.064, 0.100));
-    float armR = ell(aq, vec2(0.0, 0.030), vec2(0.017, 0.040), 0.008);
-    col = mix(col, fur * 0.95, armR);
+    // The right arm drums too until a barrel goes out, then it sweeps up and
+    // over on the throw envelope and follows through back down to the drum.
+    float drumR = 1.0 - drum;
+    float thr = clamp(throwT, 0.0, 1.0);
+    float aR0 = mix(PI - mix(-0.50, -1.00, drumR), 1.35, thr);
+    float aR1 = mix(PI - mix( 0.75,  0.05, drumR), 2.40, thr);
+    col = mix(col, fur * 0.95, kongArm(q, vec2(0.062, 0.105), aR0, aR1, 0.013));
 
     col = mix(col, fur * 1.12, ell(q, vec2(0.0, 0.140), vec2(0.050, 0.040), 0.008));
     col = mix(col, pale, ell(q, vec2(0.0, 0.124), vec2(0.033, 0.021), 0.006));
@@ -396,8 +424,15 @@ void main() {
     }
 
     col += palette(iHue + 0.5) * iFlash * 0.22;
-    float sp = hash21(floor(p * iResolution.y * 0.5) + floor(t * 20.0));
-    col += vec3(0.9, 0.85, 1.0) * step(0.995, sp) * (0.3 + iTreble * 0.7) * iGlitter;
+    // Sparkle, same treatment: round motes, not filled cells.
+    vec2 spc = p * iResolution.y * 0.25;
+    vec2 spg = floor(spc) + floor(t * 20.0);
+    float sp = hash21(spg);
+    if (sp > 0.985) {
+        vec2 spd = fract(spc) - vec2(hash21(spg + 2.7), hash21(spg + 6.1));
+        col += vec3(0.9, 0.85, 1.0) * exp(-dot(spd, spd) * 30.0)
+             * (0.35 + iTreble * 0.8) * iGlitter;
+    }
 
     float vig = smoothstep(1.4, 0.15, length(uv - 0.5));
     col *= vig;
@@ -476,6 +511,7 @@ class DonkeyKong(BaseEffect):
         self._kong_pos = self._row_point(_NROWS - 1, 0.12)
         self._kong_throw = 0.0
         self._kong_rage = 0.0
+        self._kong_pound = float(self.rng.uniform(0.0, 2.0 * math.pi))
         self._throw_cd = float(self.rng.uniform(1.0, 2.5))
         self._damsel_pos = self._row_point(_NROWS - 1, 0.86)
         self._oil_pos = self._row_point(0, 0.97)
@@ -697,6 +733,11 @@ class DonkeyKong(BaseEffect):
         self._hero_hit = max(0.0, self._hero_hit - dt * 1.4)
         self._kong_throw = max(0.0, self._kong_throw - dt * 1.6)
         self._kong_rage = max(0.0, self._kong_rage - dt * 1.9)
+        # Kong idles at about one beat of the chest a second and drums roughly
+        # three times faster while the beat envelope is up. Advancing the phase
+        # keeps it continuous however the envelope moves.
+        self._kong_pound = (self._kong_pound
+                            + dt * (6.3 + self._kong_rage * 13.0)) % (2.0 * math.pi)
         self._win = max(0.0, self._win - dt * 0.55)
 
         tempo = max(0.05, float(self.parameters['speed'])) * (1.0 + self._mid * 0.4)
@@ -760,6 +801,7 @@ class DonkeyKong(BaseEffect):
         p['iKongPos'].value = self._wpt(self._kong_pos, aspect)
         p['iKongThrow'].value = float(self._kong_throw)
         p['iKongRage'].value = float(self._kong_rage)
+        p['iKongPound'].value = float(self._kong_pound)
         p['iDamselPos'].value = self._wpt(self._damsel_pos, aspect)
         p['iOilPos'].value = self._wpt(self._oil_pos, aspect)
 

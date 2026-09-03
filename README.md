@@ -1,6 +1,6 @@
 # games-01 — Unicorn Viz effect pack
 
-**Version 0.13.2**
+**Version 0.13.3**
 
 
 arcade / game-like visuals: Breakout, Neon Pac, Galaga, Joust, Tetris,
@@ -9,6 +9,23 @@ Missile Command, Donkey Kong, Q*bert.
 Each effect subclasses `unicornviz.effects.base.BaseEffect` and is auto-discovered.
 
 ## Changelog
+
+- **0.13.3** — Donkey Kong: Kong's arms are jointed. Each was a single stick
+  whose far end slid horizontally (`-0.030 + rage * sin(iTime * 26.0) * 0.016`),
+  which at the sprite's scale read as an unfortunate piston stroke, and it was
+  gated by a beat envelope while its phase ran free, so the motion jumped
+  whenever a beat re-triggered mid-stroke. Both arms are now shoulder-elbow-fist
+  limbs drumming the chest in antiphase, driven by a phase integrated on the CPU
+  — audio modulates its *rate*, never its value — so the arc is continuous
+  through any re-trigger. The right arm still sweeps up and over on a throw and
+  follows through back into the drum.
+
+  Also finished the "ASCII dots" job started in 0.13.2. That release fixed the
+  dots' *randomness* (the hash had collapsed to a fixed lattice); their *shape*
+  was still a bare threshold on a cell hash, which fills the whole square cell.
+  Every star and sparkle field across Donkey Kong, Galaga, Joust, Missile
+  Command, Neon Pac, Q\*bert and Tetris now places a soft round point inside its
+  cell instead.
 
 - **0.13.2** — killed the "ASCII dots": the regular grid of tiny marks visible
   across Donkey Kong, Galaga, Joust, Missile Command, Neon Pac, Q\*bert and
