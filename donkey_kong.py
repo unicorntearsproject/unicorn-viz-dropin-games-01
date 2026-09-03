@@ -454,7 +454,10 @@ class DonkeyKong(BaseEffect):
         'Audio Spectrum', 'Audio Waveforms',
     ]
 
-    _HERO_SPEED = 0.55         # progress-fraction per second along a girder
+    # Progress-fraction per second along a girder. At 0.55 the hero crossed
+    # a whole girder in under two seconds, which read as a sprint and left
+    # no time to see him react to anything.
+    _HERO_SPEED = 0.30
     _CLIMB_SPEED = 0.9
     _BARREL_SPEED = 0.32
     _HAMMER_TIME = 4.5         # seconds the hammer stays up once grabbed
@@ -482,22 +485,42 @@ class DonkeyKong(BaseEffect):
         # Even rows descend to the right, odd rows descend to the left, so a
         # barrel released at Kong's feet zig-zags all the way down instead of
         # rolling straight off one end.
+        # The board is laid out fresh on every activation. It used to be a
+        # single hard-coded arrangement -- same pitch, same spacing, ladders
+        # always at 0.30/0.70 -- so every run opened on an identical screen,
+        # which the pack's randomisation rule exists to prevent. What varies:
+        # which way the zig-zag starts, how steeply the girders pitch, how far
+        # apart the rows sit, and where the ladders land.
         left, right = 0.0, 1.0
         span = right - left
+        flip = self.rng.random() < 0.5
+        pitch = float(self.rng.uniform(0.038, 0.075))
+        gap = float(self.rng.uniform(0.140, 0.172))
+        base = -0.44 + float(self.rng.uniform(-0.015, 0.030))
         self._rows: list[tuple[float, float, float, float]] = []
         for i in range(_NROWS):
-            y = -0.42 + i * 0.155
-            if i % 2 == 0:
-                self._rows.append((left, y + 0.055, right, y))
+            y = base + i * gap
+            # A girder descends one way or the other; the parity alternates so
+            # a barrel released at Kong's feet zig-zags all the way down.
+            if (i % 2 == 0) != flip:
+                self._rows.append((left, y + pitch, right, y))
             else:
-                self._rows.append((left, y, right, y + 0.055))
+                self._rows.append((left, y, right, y + pitch))
 
+        # One or two ladders per gap, jittered. Every gap keeps at least one,
+        # or the hero would have no way up and would stall on that girder.
         self._ladders: list[dict] = []
-        fracs = [0.30, 0.70]
         for i in range(_NROWS - 1):
-            for j, fr in enumerate(fracs):
-                x = left + span * (fr if (i + j) % 2 == 0 else 1.0 - fr)
-                self._ladders.append({'row_lo': i, 'row_hi': i + 1, 'x': x})
+            if self.rng.random() < 0.30:
+                fracs = [float(self.rng.uniform(0.30, 0.70))]
+            else:
+                fracs = [float(self.rng.uniform(0.16, 0.40)),
+                         float(self.rng.uniform(0.60, 0.84))]
+                if self.rng.random() < 0.5:
+                    fracs.reverse()
+            for fr in fracs:
+                self._ladders.append({'row_lo': i, 'row_hi': i + 1,
+                                      'x': left + span * fr})
 
         self._hero_row = 0
         self._hero_t = float(self.rng.uniform(0.10, 0.22))
@@ -508,13 +531,13 @@ class DonkeyKong(BaseEffect):
         self._hero_hit = 0.0
         self._hero_hammer = 0.0
 
-        self._kong_pos = self._row_point(_NROWS - 1, 0.12)
+        self._kong_pos = self._row_point(_NROWS - 1, float(self.rng.uniform(0.07, 0.22)))
         self._kong_throw = 0.0
         self._kong_rage = 0.0
         self._kong_pound = float(self.rng.uniform(0.0, 2.0 * math.pi))
         self._throw_cd = float(self.rng.uniform(1.0, 2.5))
-        self._damsel_pos = self._row_point(_NROWS - 1, 0.86)
-        self._oil_pos = self._row_point(0, 0.97)
+        self._damsel_pos = self._row_point(_NROWS - 1, float(self.rng.uniform(0.78, 0.93)))
+        self._oil_pos = self._row_point(0, float(self.rng.uniform(0.90, 0.99)))
 
         self._barrels: list[dict] = []
         self._hammer: dict | None = None
@@ -559,14 +582,23 @@ class DonkeyKong(BaseEffect):
             return (self._hero_climb['x'], y0 + (y1 - y0) * self._hero_climb_frac)
         x, y = self._row_point(self._hero_row, self._hero_t)
         if self._hero_jump > 0.0:
-            y += 0.055 * float(np.sin(np.pi * self._hero_jump))
+            y += 0.085 * float(np.sin(np.pi * self._hero_jump))
         return (x, y)
 
-    def _barrel_near(self, row: int, t: float, ahead_sign: float) -> bool:
+    def _barrel_near(self, row: int, t: float) -> bool:
+        """True when a barrel is rolling toward the hero and close enough to jump.
+
+        The old check looked only in the direction the hero was *walking*, so a
+        barrel closing on him from behind never triggered a jump -- and since
+        barrels run downhill while the hero is usually working toward the high
+        end of a girder, that was most of them. What matters is whether the
+        barrel is closing, which is what the girder's downhill direction says.
+        """
+        down = self._row_downhill_dir(row)
         for b in self._barrels:
             if b['row'] != row or b['lad'] is not None:
                 continue
-            if 0.0 < (b['t'] - t) * ahead_sign < 0.09:
+            if (t - b['t']) * down > 0.0 and abs(b['t'] - t) < 0.13:
                 return True
         return False
 
@@ -576,7 +608,7 @@ class DonkeyKong(BaseEffect):
         self._smash[slot] = (x, y, 0.0)
 
     def _update_hero(self, dt: float, tempo: float) -> None:
-        self._hero_jump = max(0.0, self._hero_jump - dt * 2.2)
+        self._hero_jump = max(0.0, self._hero_jump - dt * 1.7)
 
         if self._hero_climb is not None:
             self._hero_climb_frac += dt * self._CLIMB_SPEED * tempo
@@ -595,6 +627,8 @@ class DonkeyKong(BaseEffect):
         # With the hammer up the hero stops climbing and goes hunting — the
         # classic trade-off, and it reads clearly on screen.
         if self._hero_hammer > 0.0:
+            if self._barrel_near(self._hero_row, self._hero_t) and self._hero_jump <= 0.0:
+                self._hero_jump = 1.0
             prey = [b for b in self._barrels
                     if b['row'] == self._hero_row and b['lad'] is None]
             if prey:
@@ -625,7 +659,7 @@ class DonkeyKong(BaseEffect):
         target_t = self._t_at_x(self._hero_row, target['x'])
         ahead = 1.0 if target_t > self._hero_t else -1.0
         self._hero_face = ahead
-        if self._barrel_near(self._hero_row, self._hero_t, ahead) and self._hero_jump <= 0.0:
+        if self._barrel_near(self._hero_row, self._hero_t) and self._hero_jump <= 0.0:
             self._hero_jump = 1.0
         step = ahead * self._HERO_SPEED * tempo * dt
         if abs(target_t - self._hero_t) < abs(step):

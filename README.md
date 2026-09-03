@@ -1,6 +1,6 @@
 # games-01 — Unicorn Viz effect pack
 
-**Version 0.13.3**
+**Version 0.14.0**
 
 
 arcade / game-like visuals: Breakout, Neon Pac, Galaga, Joust, Tetris,
@@ -9,6 +9,29 @@ Missile Command, Donkey Kong, Q*bert.
 Each effect subclasses `unicornviz.effects.base.BaseEffect` and is auto-discovered.
 
 ## Changelog
+
+- **0.14.0** — Donkey Kong: the hero jumps, moves at a watchable pace, and the
+  board is different every time.
+
+  *The jump.* `_barrel_near()` looked for barrels only in the direction the hero
+  was **walking**. Barrels roll downhill and the hero is usually working toward
+  the high end of a girder, so most barrels closed on him from behind and never
+  triggered a jump at all. It now asks whether the barrel is *closing* — which
+  is what the girder's downhill direction tells you — over a slightly wider
+  window. Measured over six one-minute runs: 9.8 jumps/min before, 14.5 after.
+  The arc also went from 0.055 to 0.085 and the hang from 0.45 s to 0.59 s, so
+  a jump is actually visible when it happens; he hops while carrying the hammer
+  too now.
+
+  *The pace.* `_HERO_SPEED` was 0.55 progress-fractions per second, which
+  crossed a whole girder in under two seconds and read as a sprint. Now 0.30.
+
+  *The board.* It was a single hard-coded arrangement — same girder pitch, same
+  row spacing, ladders always at 0.30 and 0.70 — so every activation opened on
+  an identical screen, which is exactly what the pack's randomisation rule
+  exists to prevent. Laid out fresh per activation now: which way the zig-zag
+  starts, girder pitch, row spacing and base height, one or two ladders per gap
+  at jittered positions, and Kong's, the damsel's and the oil drum's spots.
 
 - **0.13.3** — Donkey Kong: Kong's arms are jointed. Each was a single stick
   whose far end slid horizontally (`-0.030 + rage * sin(iTime * 26.0) * 0.016`),
