@@ -1,6 +1,6 @@
 # games-01 — Unicorn Viz effect pack
 
-**Version 0.16.0**
+**Version 0.17.0**
 
 
 arcade / game-like visuals: Breakout, Neon Pac, Galaga, Joust, Tetris,
@@ -10,6 +10,30 @@ Marble Madness.
 Each effect subclasses `unicornviz.effects.base.BaseEffect` and is auto-discovered.
 
 ## Changelog
+
+- **0.17.0** — Audio uplift across the four new effects: Super Mario, Mario
+  Kart, Frogger and Marble Madness.
+
+  All four were driving off three scalars and ignoring the 64-band FFT
+  entirely, so most of each frame moved with nothing. Measured by freezing the
+  simulation and rendering the same frame quiet and loud, the share of pixels
+  that visibly reacted was 3% for Super Mario and 4% for Frogger.
+
+  Each now folds the FFT to 16 bands and binds them to whatever that effect's
+  largest surface is: Super Mario's parallax hills become a spectrum skyline,
+  Mario Kart gets an aurora over the circuit and a kerb that reads the band
+  beneath it, Frogger's thirteen lanes each take their own band, and Marble
+  Madness reads the spectrum across the chute's cross-section. Each also gains
+  `iPunch`, a second beat envelope decaying at 11/s against `iBeat`'s 3.4/s --
+  the slow one is a ~300 ms swell that reads as a pulse, so the transient
+  needed something gone again before the next beat lands. Sparkle layers were
+  added throughout, as round points inside their cells rather than a threshold
+  on a cell hash, which lights whole squares. Default `reactivity` 1.2 -> 1.5.
+
+  Reacting pixels after: Super Mario 63%, Mario Kart 80%, Frogger 98%, Marble
+  Madness 89%; mean per-pixel response up 2.8x to 4.4x. GPU cost is within
+  0.24 ms/frame of where it was. Also removed a dead assignment in Super
+  Mario's level generator that the submodule's lint scope never covered.
 
 - **0.16.0** — Frogger and Marble Madness.
 

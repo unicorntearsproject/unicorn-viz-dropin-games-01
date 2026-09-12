@@ -43,7 +43,7 @@ import numpy as np
 
 from unicornviz.effects.base import AudioData, BaseEffect
 
-__version__ = '0.15.0'
+__version__ = '0.17.0'
 
 _COLS = 19              # ground columns handed to the shader (view + margin)
 _VIEW_W = 15.0          # tiles visible across the screen
@@ -74,6 +74,8 @@ uniform float iBass;
 uniform float iMid;
 uniform float iTreble;
 uniform float iBeat;
+uniform float iPunch;          // the beat's transient, decaying ~3x faster
+uniform vec4  iBand[4];        // 16 FFT bands, low to high
 uniform float iHue;
 uniform float iGlitter;
 uniform float iSky;            // per-activation time of day
@@ -102,6 +104,20 @@ float hash21(vec2 p) {
 vec3 palette(float t) { return 0.5 + 0.5 * cos(TAU * (t + vec3(0.0, 0.33, 0.67))); }
 float box(vec2 p, vec2 b) { vec2 d = abs(p) - b; return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0); }
 
+// The 16 bands, packed four to a vec4. `bandU` reads the spectrum as a curve
+// across 0..1 so a silhouette can be driven straight off it.
+float bandI(int i) {
+    i = clamp(i, 0, 15);
+    vec4 v = iBand[i >> 2];
+    int k = i & 3;
+    return k == 0 ? v.x : (k == 1 ? v.y : (k == 2 ? v.z : v.w));
+}
+float bandU(float u) {
+    float f = clamp(u, 0.0, 1.0) * 15.0;
+    int i = int(f);
+    return mix(bandI(i), bandI(i + 1), fract(f));
+}
+
 // Ground top at a world column, with the camera's sub-tile offset applied.
 float groundAt(float wx) {
     int i = int(clamp(floor(wx), 0.0, 18.0));
@@ -117,14 +133,25 @@ vec3 backdrop(vec2 w, float t) {
     else if (iSky < 0.67) { lo = vec3(1.00, 0.68, 0.38); hi = vec3(0.18, 0.16, 0.58); }
     else                  { lo = vec3(0.24, 0.16, 0.52); hi = vec3(0.04, 0.05, 0.24); }
     vec3 col = mix(lo, hi, pow(up, 0.8));
-    col = mix(col, palette(iHue + 0.55), 0.12 + iMid * 0.10);
+    col = mix(col, palette(iHue + 0.55), 0.12 + iMid * 0.18);
+    col += palette(iHue + 0.2) * iPunch * 0.09 * (1.0 - up * 0.5);
+
+    // The spectrum, read left to right across the frame. The hills were the
+    // largest thing on screen and the one thing that never moved with the
+    // music, which is most of why only 3% of pixels reacted at all.
+    float su = clamp((w.x - iCamFrac) / 15.0, 0.0, 1.0);
+    float spec = bandU(su);
 
     // Rolling hills, two layers at different parallax rates.
     for (int k = 0; k < 2; k++) {
         float fk = float(k);
         float rate = 0.10 + fk * 0.13;
         float hx = w.x * rate + t * 0.0 + fk * 7.3;
-        float top = iCamY * 0.25 + 2.2 + fk * 1.1
+        // Kept small: the ridge is a skyline, and a lift big enough to
+        // shove it into half the frame stops being a spectrum and starts
+        // being terrain that ate the level.
+        float lift = spec * (0.42 + fk * 0.62);
+        float top = iCamY * 0.25 + 2.2 + fk * 1.1 + lift
                   + sin(hx * 0.55) * 0.7 + sin(hx * 1.31 + 1.7) * 0.35;
         if (w.y < top) {
             vec3 hc = mix(vec3(0.13, 0.58, 0.26), palette(iHue + 0.3), 0.08 + fk * 0.06);
@@ -132,13 +159,27 @@ vec3 backdrop(vec2 w, float t) {
             float crown = smoothstep(0.55, 0.0, top - w.y);
             col = mix(col, hc * (0.62 + fk * 0.30) * (1.0 + crown * 0.55), 0.93);
         }
+        // A lit edge on the ridge, brightest where that band is loudest, so
+        // the skyline reads as a spectrum and not just as terrain.
+        col += mix(palette(iHue + 0.15), vec3(1.0), 0.35)
+             * smoothstep(0.13, 0.0, abs(w.y - top))
+             * (0.20 + spec * 1.45 + iPunch * 0.55) * (0.55 + fk * 0.45);
     }
     // Clouds.
     float cy = w.y - (iCamY + iViewH * 0.72);
     float cx = w.x * 0.28 + 4.0;
     float puff = exp(-pow(cy, 2.0) * 1.6)
                * smoothstep(0.35, 0.9, sin(cx * 0.9) * 0.5 + 0.5 + sin(cx * 2.3) * 0.2);
-    col = mix(col, vec3(1.0), clamp(puff, 0.0, 1.0) * 0.55);
+    col = mix(col, vec3(1.0), clamp(puff, 0.0, 1.0) * (0.48 + iMid * 0.25));
+
+    // Sparkle in the air: round points inside their cells, drifting up. A
+    // bare threshold on the cell hash would light whole squares.
+    vec2 cell = vec2(w.x * 2.6, (w.y - t * 0.9) * 2.6);
+    vec2 cf = fract(cell) - 0.5;
+    float gl = step(0.972 - iPunch * 0.030, hash21(floor(cell)))
+             * smoothstep(0.34, 0.02, length(cf));
+    col += mix(vec3(1.0), palette(iHue + 0.35), 0.35) * gl
+         * (0.35 + iTreble * 1.5 + iPunch * 1.1) * iGlitter;
     return col;
 }
 
@@ -169,7 +210,10 @@ void main() {
         if (depth < 0.5) soil = mix(soil, mix(vec3(0.28, 0.80, 0.28), neon, 0.10), 0.85);
         col = soil * (1.05 + 0.75 * exp(-depth * 0.35));
         // Neon lip along the surface, which is where the pack's look lives.
-        col += neon * smoothstep(0.10, 0.0, depth) * (0.5 + iBass * 0.9);
+        col += neon * smoothstep(0.10, 0.0, depth)
+             * (0.40 + iBass * 1.7 + iPunch * 1.0);
+        // The soil itself breathes with the low end.
+        col *= 1.0 + iBass * 0.12 * exp(-depth * 0.6);
     }
 
     // ---- pipes ----
@@ -218,7 +262,7 @@ void main() {
         } else {
             col = mix(vec3(0.42, 0.26, 0.12), palette(iHue + 0.6), 0.18);
         }
-        col += neon * smoothstep(0.05, 0.0, abs(d)) * (0.5 + iBeat * 0.7);
+        col += neon * smoothstep(0.05, 0.0, abs(d)) * (0.45 + iBeat * 0.9 + iPunch * 1.1);
     }
 
     // ---- coins ----
@@ -232,7 +276,8 @@ void main() {
         float d = length(q / vec2(wdt, 0.20)) - 1.0;
         vec3 gold = mix(vec3(1.0, 0.85, 0.20), palette(iHue + 0.1), 0.2);
         col = mix(col, gold, smoothstep(0.08, 0.0, d) * C.z);
-        col += gold * exp(-max(d, 0.0) * 5.0) * C.z * (0.5 + iTreble * 1.2) * iGlitter;
+        col += gold * exp(-max(d, 0.0) * 5.0) * C.z
+             * (0.45 + iTreble * 2.0 + iPunch * 1.2) * iGlitter;
     }
 
     // ---- goombas ----
@@ -301,9 +346,10 @@ void main() {
     vec2 sg = floor(sp) + floor(t * 12.0);
     if (hash21(sg) > 0.9965) {
         vec2 sd = fract(sp) - vec2(hash21(sg + 3.1), hash21(sg + 7.7));
-        col += vec3(1.0) * exp(-dot(sd, sd) * 26.0) * (0.3 + iTreble * 0.9) * iGlitter;
+        col += vec3(1.0) * exp(-dot(sd, sd) * 26.0)
+             * (0.28 + iTreble * 1.6 + iPunch * 0.9) * iGlitter;
     }
-    col += neon * iBeat * 0.07;
+    col += neon * (iBeat * 0.07 + iPunch * 0.10);
     // Aspect-corrected, or the vignette is an ellipse on a wide screen.
     col *= smoothstep(1.05, 0.30, length((v_uv - 0.5) * vec2(A, 1.0)));
     col = col / (1.0 + col * 0.30);
@@ -330,7 +376,7 @@ class SuperMario(BaseEffect):
     def _init(self) -> None:
         self.parameters = {
             'speed': float(self.config.get('speed', 1.0)),
-            'reactivity': float(self.config.get('reactivity', 1.2)),
+            'reactivity': float(self.config.get('reactivity', 1.5)),
             'glitter': float(self.config.get('glitter', 1.0)),
         }
         self._prog = self._make_program(_VERT, _FRAG)
@@ -338,6 +384,12 @@ class SuperMario(BaseEffect):
 
         self._bass = self._mid = self._treble = 0.0
         self._beat = 0.0
+        self._punch = 0.0
+        self._band = np.zeros(16, dtype=np.float64)
+        # The spectrum falls away with frequency, so an untilted reading only
+        # ever moves at its left-hand end and the skyline looks half dead.
+        self._band_tilt = np.linspace(1.0, 2.7, 16)
+        self._tbl_band = np.zeros((4, 4), dtype='f4')
         self._hue = float(self.rng.uniform(0.0, 1.0))
         self._sky = float(self.rng.uniform(0.0, 1.0))
         self._seed = float(self.rng.uniform(0.0, 1000.0))
@@ -378,7 +430,6 @@ class SuperMario(BaseEffect):
         got = self._col_cache.get(tile)
         if got is not None:
             return got
-        r = self._rand(tile, 1)
         h = _GROUND_Y
         # A long, slow terrace so the run is not dead flat.
         h += math.floor(1.6 + 1.6 * math.sin(tile * 0.045 + self._seed * 0.01)) - 1.0
@@ -554,6 +605,19 @@ class SuperMario(BaseEffect):
             return
         self._coins[int(free[0])] = (x, y, 13.0, 1.0, float(self.rng.uniform(0.0, 6.0)))
 
+    def _pump_bands(self, audio: AudioData, dt: float) -> None:
+        """Fold the FFT down to 16 bands the shader can read as a curve."""
+        b = getattr(audio, 'bands', None)
+        if b is not None and len(b) >= 16:
+            edges = np.linspace(0, len(b), 17).astype(int)
+            tgt = np.array([float(np.mean(b[edges[i]:max(edges[i] + 1, edges[i + 1])]))
+                            for i in range(16)]) * self._band_tilt
+            self._band += (tgt - self._band) * min(1.0, dt * 14.0)
+        else:
+            self._band *= math.exp(-dt * 2.5)
+        np.clip(self._band, 0.0, 1.6, out=self._band)
+        self._tbl_band[:] = self._band.reshape(4, 4).astype('f4')
+
     def update(self, dt: float, audio: AudioData) -> None:
         """Advance the run; the beat buys a jump when one is available."""
         super().update(dt, audio)
@@ -561,8 +625,10 @@ class SuperMario(BaseEffect):
         self._bass = float(np.clip(audio.bass_n * react, 0.0, 1.8))
         self._mid = float(np.clip(audio.mid_n * react, 0.0, 1.8))
         self._treble = float(np.clip(audio.treble_n * react, 0.0, 1.8))
+        self._pump_bands(audio, dt)
         if audio.beat > 0.5:
             self._beat = 1.0
+            self._punch = 1.0
             # Not every beat: jumping on all of them kept him in the air and
             # the run cycle never showed.
             if (self._coyote > 0.0 and self._hero_vy <= 0.0
@@ -570,6 +636,10 @@ class SuperMario(BaseEffect):
                 self._hero_vy = self._JUMP_V * (0.9 + self._bass * 0.45)
                 self._coyote = 0.0
         self._beat = max(0.0, self._beat - dt * 3.4)
+        # A second, much faster envelope. `iBeat` at 3.4/s is a ~300 ms swell,
+        # which reads as a pulse rather than as a hit; the transient needs
+        # something that is gone again before the next one arrives.
+        self._punch = max(0.0, self._punch - dt * 11.0)
 
         tempo = max(0.05, float(self.parameters['speed'])) * (0.8 + self._bass * 0.55)
         self._step(min(dt, 1.0 / 30.0), tempo)
@@ -602,6 +672,8 @@ class SuperMario(BaseEffect):
         p['iMid'].value = self._mid
         p['iTreble'].value = self._treble
         p['iBeat'].value = self._beat
+        p['iPunch'].value = self._punch
+        p['iBand'].write(self._tbl_band.tobytes())
         p['iHue'].value = self._hue
         p['iGlitter'].value = max(0.0, float(self.parameters['glitter']))
         p['iSky'].value = self._sky

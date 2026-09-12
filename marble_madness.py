@@ -41,7 +41,7 @@ import numpy as np
 
 from unicornviz.effects.base import AudioData, BaseEffect
 
-__version__ = '0.16.0'
+__version__ = '0.17.0'
 
 _SLOPE = 0.22           # how steeply the chute descends along +x
 _HALF = 13.0            # chute half-width before the edge gives way
@@ -81,6 +81,8 @@ uniform float iBass;
 uniform float iMid;
 uniform float iTreble;
 uniform float iBeat;
+uniform float iPunch;      // the beat's transient, decaying ~3x faster
+uniform vec4  iBand[4];    // 16 FFT bands, low to high
 uniform float iHue;
 uniform float iGlitter;
 uniform float iZoom;
@@ -104,6 +106,21 @@ float hash21(vec2 p) {
     return fract(p.x * p.y);
 }
 vec3 palette(float t) { return 0.5 + 0.5 * cos(TAU * (t + vec3(0.0, 0.33, 0.67))); }
+
+// The 16 bands, packed four to a vec4. `bandU` reads the spectrum as a curve
+// across 0..1, so the chute's cross-section can be driven straight off it.
+float bandI(int i) {
+    i = clamp(i, 0, 15);
+    vec4 v = iBand[i >> 2];
+    int k = i & 3;
+    return k == 0 ? v.x : (k == 1 ? v.y : (k == 2 ? v.z : v.w));
+}
+float bandU(float u) {
+    float f = clamp(u, 0.0, 1.0) * 15.0;
+    int i = int(f);
+    return mix(bandI(i), bandI(i + 1), fract(f));
+}
+
 
 // The chute's centreline. Camera-relative x, with the absolute phase carried
 // in as a uniform so nothing here ever sees a large coordinate.
@@ -190,7 +207,8 @@ void main() {
     vec2 cell = (p + vec2(t * 0.004, 0.0)) * 46.0;
     vec2 cf = fract(cell) - 0.5;
     bg += vec3(0.7, 0.8, 1.0) * step(0.985, hash21(floor(cell)))
-        * smoothstep(0.34, 0.02, length(cf)) * (0.35 + iTreble * 0.5) * iGlitter;
+        * smoothstep(0.34, 0.02, length(cf))
+        * (0.30 + iTreble * 1.5 + iPunch * 1.3) * iGlitter;
     col = bg;
 
     if (got) {
@@ -202,7 +220,17 @@ void main() {
         vec3 tileA = mix(vec3(0.62, 0.60, 0.72), palette(iHue + 0.10), 0.45);
         vec3 tileB = mix(vec3(0.30, 0.29, 0.40), palette(iHue + 0.55), 0.30);
         vec3 base = mix(tileA, tileB, chk);
-        base = mix(base, palette(iHue + 0.3), iMid * 0.10);
+        base = mix(base, palette(iHue + 0.3), iMid * 0.18);
+        // The chute's cross-section is the spectrum: low bands down the
+        // centreline, high bands out at the banking. The tiles were the
+        // largest surface in frame and took nothing from the music.
+        float bu = clamp(d / 13.0, 0.0, 1.0);
+        float lb = bandU(bu);
+        // Modulating the tiles, not replacing them: at 0.55/0.32 the bands
+        // read as painted stripes and the chequer -- which is what says
+        // "Marble Madness" -- stopped being the dominant pattern.
+        base *= 1.0 + lb * 0.30;
+        base += mix(palette(iHue + 0.15), vec3(1.0), 0.30) * lb * 0.16;
         // The banked rim reads as a separate material, lit from within.
         float rim = smoothstep(13.0 - 4.5, 13.0 - 0.3, d);
         base = mix(base, mix(neon, vec3(1.0), 0.25), rim * 0.30);
@@ -223,12 +251,13 @@ void main() {
         // abyss. `rim` is 1 everywhere past the edge, so leaving it unmasked
         // washes the entire lower plain in rim glow.
         float on = 1.0 - out_;
-        col += neon * rim * (0.05 + iBass * 0.20) * on;
+        col += neon * rim * (0.04 + iBass * 0.55 + lb * 0.50 + iPunch * 0.45) * on;
         // A lip of light exactly on the edge, which is where the eye reads the
         // shape of the course from. Narrow: widened into the banking it stops
         // being an edge and becomes a wash over most of the chute.
         col += mix(neon, vec3(1.0), 0.4)
-             * smoothstep(0.40, 0.0, abs(d - 13.0)) * (0.30 + iTreble * 0.45);
+             * smoothstep(0.40, 0.0, abs(d - 13.0))
+             * (0.26 + iTreble * 0.9 + iPunch * 1.1);
         // The ring thrown out where the marble came back down.
         if (iLand > 0.0) {
             float rr = length(hit.xz - iBall[0].xz);
@@ -237,6 +266,15 @@ void main() {
                  * iLand * 0.85 * on;
         }
 
+        // Glitter lying on the tiles, in world space so it stays put as the
+        // camera runs over it. Round points inside their cells -- a bare
+        // threshold on the cell hash would light whole squares.
+        vec2 gc = vec2(hit.x, hit.z) * 1.15;
+        vec2 gf = fract(gc) - 0.5;
+        col += mix(vec3(1.0), neon, 0.35) * on
+             * step(0.955 - iPunch * 0.030, hash21(floor(gc)))
+             * smoothstep(0.34, 0.02, length(gf))
+             * (0.20 + iTreble * 1.7 + iPunch * 1.5) * iGlitter;
         // Contact shadows under each marble.
         for (int i = 0; i < 4; i++) {
             vec4 B = iBall[i];
@@ -285,12 +323,13 @@ void main() {
         }
         vec3 c = body * (0.22 + dif * 0.95);
         c += vec3(1.0) * pow(clamp(dot(reflect(-L, n), -FWD), 0.0, 1.0), 42.0)
-           * (0.7 + iTreble * 0.9);
-        c += neon * fres * (0.35 + iBass * 0.85) * (i == 0 ? 1.0 : 0.45);
+           * (0.6 + iTreble * 1.6 + iPunch * 1.4);
+        c += neon * fres * (0.30 + iBass * 1.5 + iPunch * 1.1)
+           * (i == 0 ? 1.0 : 0.45);
         col = c;
     }
 
-    col += neon * iBeat * 0.06;
+    col += neon * (iBeat * 0.06 + iPunch * 0.10);
     col *= smoothstep(1.30, 0.34, length(p));
     col = col / (1.0 + col * 0.32);
     fragColor = vec4(pow(clamp(col, 0.0, 1.0), vec3(0.88)), 1.0);
@@ -312,7 +351,7 @@ class MarbleMadness(BaseEffect):
     def _init(self) -> None:
         self.parameters = {
             'speed': float(self.config.get('speed', 1.0)),
-            'reactivity': float(self.config.get('reactivity', 1.2)),
+            'reactivity': float(self.config.get('reactivity', 1.5)),
             'glitter': float(self.config.get('glitter', 1.0)),
         }
         self._prog = self._make_program(_VERT, _FRAG)
@@ -320,6 +359,12 @@ class MarbleMadness(BaseEffect):
 
         self._bass = self._mid = self._treble = 0.0
         self._beat = 0.0
+        self._punch = 0.0
+        self._band = np.zeros(16, dtype=np.float64)
+        # The spectrum falls away with frequency, so an untilted reading only
+        # ever moves at the centre of the chute and the banking looks dead.
+        self._band_tilt = np.linspace(1.0, 2.7, 16)
+        self._tbl_band = np.zeros((4, 4), dtype='f4')
         self._hue = float(self.rng.uniform(0.0, 1.0))
         self._glitter = max(0.0, float(self.parameters['glitter']))
         # World units across the short screen axis. The chute is 26 wide, so
@@ -353,6 +398,19 @@ class MarbleMadness(BaseEffect):
             })
 
         self._tbl_ball = np.zeros((4, 4), dtype='f4')
+
+    def _pump_bands(self, audio: AudioData, dt: float) -> None:
+        """Fold the FFT down to 16 bands the shader can read as a curve."""
+        b = getattr(audio, 'bands', None)
+        if b is not None and len(b) >= 16:
+            edges = np.linspace(0, len(b), 17).astype(int)
+            tgt = np.array([float(np.mean(b[edges[i]:max(edges[i] + 1, edges[i + 1])]))
+                            for i in range(16)]) * self._band_tilt
+            self._band += (tgt - self._band) * min(1.0, dt * 14.0)
+        else:
+            self._band *= math.exp(-dt * 2.5)
+        np.clip(self._band, 0.0, 1.6, out=self._band)
+        self._tbl_band[:] = self._band.reshape(4, 4).astype('f4')
 
     # -------------------------------------------------------------- the course
     def _centre(self, x: float) -> float:
@@ -424,10 +482,15 @@ class MarbleMadness(BaseEffect):
         self._bass = float(np.clip(audio.bass_n * react, 0.0, 1.8))
         self._mid = float(np.clip(audio.mid_n * react, 0.0, 1.8))
         self._treble = float(np.clip(audio.treble_n * react, 0.0, 1.8))
+        self._pump_bands(audio, dt)
         beat_now = audio.beat > 0.5
         if beat_now:
             self._beat = 1.0
+            self._punch = 1.0
         self._beat = max(0.0, self._beat - dt * 3.4)
+        # A second, much faster envelope: iBeat at 3.4/s is a ~300 ms swell,
+        # which reads as a pulse rather than as a hit.
+        self._punch = max(0.0, self._punch - dt * 11.0)
         self._land = max(0.0, self._land - dt * 1.9)
 
         pace = max(0.05, float(self.parameters['speed']))
@@ -502,6 +565,8 @@ class MarbleMadness(BaseEffect):
         p['iMid'].value = self._mid
         p['iTreble'].value = self._treble
         p['iBeat'].value = self._beat
+        p['iPunch'].value = self._punch
+        p['iBand'].write(self._tbl_band.tobytes())
         p['iHue'].value = self._hue
         p['iGlitter'].value = self._glitter
         p['iZoom'].value = self._zoom

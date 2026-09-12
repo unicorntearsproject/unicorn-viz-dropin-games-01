@@ -38,7 +38,7 @@ import numpy as np
 
 from unicornviz.effects.base import AudioData, BaseEffect
 
-__version__ = '0.16.0'
+__version__ = '0.17.0'
 
 _ROWS = 13              # 0 bank, 1-5 road, 6 median, 7-11 river, 12 homes
 _ROAD_LO, _ROAD_HI = 1, 5
@@ -83,6 +83,8 @@ uniform float iBass;
 uniform float iMid;
 uniform float iTreble;
 uniform float iBeat;
+uniform float iPunch;       // the beat's transient, decaying ~3x faster
+uniform vec4  iBand[4];     // 16 FFT bands, low to high
 uniform float iHue;
 uniform float iGlitter;
 uniform vec4  iCar[20];     // x, row, half-length, kind
@@ -102,6 +104,21 @@ float hash21(vec2 p) {
 }
 vec3 palette(float t) { return 0.5 + 0.5 * cos(TAU * (t + vec3(0.0, 0.33, 0.67))); }
 
+// The 16 bands, packed four to a vec4. `bandU` reads the spectrum as a curve
+// across 0..1, so the board's thirteen lanes can each take their own band.
+float bandI(int i) {
+    i = clamp(i, 0, 15);
+    vec4 v = iBand[i >> 2];
+    int k = i & 3;
+    return k == 0 ? v.x : (k == 1 ? v.y : (k == 2 ? v.z : v.w));
+}
+float bandU(float u) {
+    float f = clamp(u, 0.0, 1.0) * 15.0;
+    int i = int(f);
+    return mix(bandI(i), bandI(i + 1), fract(f));
+}
+
+
 // Rounded box, in tile units.
 float sdBox(vec2 p, vec2 b, float r) {
     vec2 d = abs(p) - b + r;
@@ -116,6 +133,10 @@ void main() {
     vec2 g = vec2((v_uv.x - 0.5) * A * 13.0, v_uv.y * 13.0);
     float row = floor(g.y);
     vec3 neon = palette(iHue);
+    // Every lane takes its own band, low at the near bank and high at the
+    // bays. The board is nothing but lanes, which is why binding them is what
+    // takes this from 4% of pixels reacting to most of them.
+    float lb = bandU(row / 12.0);
     vec3 col;
 
     // ---- the bands ----
@@ -134,9 +155,13 @@ void main() {
         vec2 cf = fract(cell) - 0.5;
         float sp = step(0.975, hash21(floor(cell)))
                  * smoothstep(0.34, 0.02, length(cf));
-        col += vec3(0.70, 0.88, 1.0) * sp * (0.45 + iTreble * 0.9) * iGlitter;
+        col += vec3(0.70, 0.88, 1.0) * sp
+             * (0.40 + iTreble * 1.7 + iPunch * 1.3) * iGlitter;
+        // The lane's own band, lifting the water it sits in.
+        col += mix(vec3(0.25, 0.55, 0.95), neon, 0.4) * lb * 0.26;
     } else if (row >= 1.0 && row <= 5.0) {
         col = vec3(0.155, 0.155, 0.175) * (0.88 + 0.24 * hash21(floor(g * 6.0)));
+        col += neon * lb * 0.11;
         // Dashed lane markings on the seam between lanes.
         float dash = step(0.5, fract(g.x * 0.5 + 0.25));
         col = mix(col, vec3(0.82, 0.78, 0.42),
@@ -154,8 +179,12 @@ void main() {
                   hash21(floor(g * 5.0)));
         col = mix(col, palette(iHue + 0.3), 0.07);
     }
-    // A darker seam between every row so the lanes read as lanes.
+    // A darker seam between every row so the lanes read as lanes -- and a lit
+    // one on top of it, burning at that lane's band.
     col *= 0.80 + 0.20 * smoothstep(0.0, 0.05, fract(g.y));
+    col += mix(neon, vec3(1.0), 0.30)
+         * smoothstep(0.055, 0.0, fract(g.y))
+         * (0.10 + lb * 1.9 + iPunch * 0.55);
 
     // ---- home bays: notches cut into the top band ----
     if (row == 12.0) {
@@ -167,7 +196,8 @@ void main() {
             // A lit rim on every bay, so the targets are legible from across
             // the board and an open one pulses with the track.
             col += mix(neon, vec3(0.35, 1.0, 0.55), 0.4)
-                 * smoothstep(0.10, 0.0, abs(bay)) * (0.55 + iBass * 0.7);
+                 * smoothstep(0.10, 0.0, abs(bay))
+                 * (0.45 + iBass * 1.2 + lb * 1.4 + iPunch * 0.9);
             if (H.y > 0.5) {
                 // A frog already home: seated, facing out, eyes and all.
                 float body = sdBox(q, vec2(0.32, 0.24), 0.15);
@@ -256,13 +286,14 @@ void main() {
         float wh = min(length(q - vec2(-C.z + 0.32, -0.30)),
                        length(q - vec2(C.z - 0.32, -0.30))) - 0.15;
         col = mix(col, vec3(0.04), smoothstep(0.04, 0.0, wh));
-        col += body * smoothstep(0.09, 0.0, abs(chassis)) * (0.25 + iBass * 0.45);
+        col += body * smoothstep(0.09, 0.0, abs(chassis))
+             * (0.22 + iBass * 0.95 + iPunch * 0.85);
         // Headlights: two tight points with a short throw, not a bloom that
         // swallows the vehicle it belongs to.
         vec2 lp = q - vec2(dir * (C.z + 0.04), -0.04);
         col += vec3(1.0, 0.95, 0.76)
              * exp(-dot(lp * vec2(1.05, 5.0), lp) * 7.0)
-             * (0.55 + iTreble * 0.5) * iGlitter;
+             * (0.42 + iTreble * 0.9 + iPunch * 0.6) * iGlitter;
         col += vec3(1.0, 0.93, 0.70) * 0.30
              * exp(-dot(lp * vec2(0.30, 3.2), lp) * 2.2) * iGlitter;
     }
@@ -294,7 +325,8 @@ void main() {
             float pup = min(length(s - vec2(-0.15, 0.31)),
                             length(s - vec2(0.15, 0.31))) - 0.06;
             col = mix(col, vec3(0.04), smoothstep(0.03, 0.0, pup));
-            col += skin * smoothstep(0.14, 0.0, abs(body)) * (0.25 + iBeat * 0.7);
+            col += skin * smoothstep(0.14, 0.0, abs(body))
+                 * (0.25 + iBeat * 0.7 + iPunch * 1.4);
             // Splat ring on death.
             if (dying > 0.0) {
                 float r = dying * 1.1;
@@ -305,7 +337,15 @@ void main() {
         }
     }
 
-    col += neon * iBeat * 0.05;
+    // Glitter over the whole board: round points inside their cells, rising.
+    // A bare threshold on the cell hash would light whole squares.
+    vec2 gc = vec2(g.x * 3.2, (g.y - t * 0.8) * 3.2);
+    vec2 gf = fract(gc) - 0.5;
+    col += mix(vec3(1.0), palette(iHue + 0.3), 0.35)
+         * step(0.984 - iPunch * 0.020, hash21(floor(gc)))
+         * smoothstep(0.34, 0.02, length(gf))
+         * (0.18 + iTreble * 1.3 + iPunch * 1.0) * iGlitter;
+    col += neon * (iBeat * 0.05 + iPunch * 0.10);
     col = col / (1.0 + col * 0.30);
     fragColor = vec4(pow(clamp(col, 0.0, 1.0), vec3(0.88)), 1.0);
 }
@@ -326,7 +366,7 @@ class Frogger(BaseEffect):
     def _init(self) -> None:
         self.parameters = {
             'speed': float(self.config.get('speed', 1.0)),
-            'reactivity': float(self.config.get('reactivity', 1.2)),
+            'reactivity': float(self.config.get('reactivity', 1.5)),
             'glitter': float(self.config.get('glitter', 1.0)),
         }
         self._prog = self._make_program(_VERT, _FRAG)
@@ -334,6 +374,12 @@ class Frogger(BaseEffect):
 
         self._bass = self._mid = self._treble = 0.0
         self._beat = 0.0
+        self._punch = 0.0
+        self._band = np.zeros(16, dtype=np.float64)
+        # The spectrum falls away with frequency, so an untilted reading only
+        # ever moves in the bottom lanes and the top of the board looks dead.
+        self._band_tilt = np.linspace(1.0, 2.7, 16)
+        self._tbl_band = np.zeros((4, 4), dtype='f4')
         self._hue = float(self.rng.uniform(0.0, 1.0))
         self._glitter = max(0.0, float(self.parameters['glitter']))
 
@@ -403,6 +449,19 @@ class Frogger(BaseEffect):
         self._tbl_home = np.zeros((_NHOME, 4), dtype='f4')
 
     # ------------------------------------------------------------- the sweep
+    def _pump_bands(self, audio: AudioData, dt: float) -> None:
+        """Fold the FFT down to 16 bands the shader can read as a curve."""
+        b = getattr(audio, 'bands', None)
+        if b is not None and len(b) >= 16:
+            edges = np.linspace(0, len(b), 17).astype(int)
+            tgt = np.array([float(np.mean(b[edges[i]:max(edges[i] + 1, edges[i + 1])]))
+                            for i in range(16)]) * self._band_tilt
+            self._band += (tgt - self._band) * min(1.0, dt * 14.0)
+        else:
+            self._band *= math.exp(-dt * 2.5)
+        np.clip(self._band, 0.0, 1.6, out=self._band)
+        self._tbl_band[:] = self._band.reshape(4, 4).astype('f4')
+
     def _car_free(self, x: float, row: int, when: float,
                   margin: float = 0.55) -> bool:
         """Will the tile at *x* on *row* still be clear *when* seconds from now?
@@ -559,10 +618,15 @@ class Frogger(BaseEffect):
         self._bass = float(np.clip(audio.bass_n * react, 0.0, 1.8))
         self._mid = float(np.clip(audio.mid_n * react, 0.0, 1.8))
         self._treble = float(np.clip(audio.treble_n * react, 0.0, 1.8))
+        self._pump_bands(audio, dt)
         beat_now = audio.beat > 0.5
         if beat_now:
             self._beat = 1.0
+            self._punch = 1.0
         self._beat = max(0.0, self._beat - dt * 3.6)
+        # A second, much faster envelope: iBeat at 3.6/s is a ~280 ms swell,
+        # which reads as a pulse rather than as a hit.
+        self._punch = max(0.0, self._punch - dt * 11.0)
 
         self._pace = (max(0.05, float(self.parameters['speed']))
                       * (0.72 + self._bass * 0.55))
@@ -676,6 +740,8 @@ class Frogger(BaseEffect):
         p['iMid'].value = self._mid
         p['iTreble'].value = self._treble
         p['iBeat'].value = self._beat
+        p['iPunch'].value = self._punch
+        p['iBand'].write(self._tbl_band.tobytes())
         p['iHue'].value = self._hue
         p['iGlitter'].value = self._glitter
         p['iCar'].write(self._tbl_car.tobytes())

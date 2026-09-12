@@ -41,7 +41,7 @@ import numpy as np
 
 from unicornviz.effects.base import AudioData, BaseEffect
 
-__version__ = '0.15.0'
+__version__ = '0.17.0'
 
 _NRIVAL = 6
 _NBOX = 8
@@ -82,6 +82,8 @@ uniform float iMid;
 uniform float iTreble;
 uniform float iBeat;
 uniform float iBoost;
+uniform float iPunch;       // the beat's transient, decaying ~3x faster
+uniform vec4  iBand[4];     // 16 FFT bands, low to high
 uniform float iHue;
 uniform float iGlitter;
 uniform float iSky;
@@ -104,6 +106,21 @@ float hash21(vec2 p) {
     return fract(p.x * p.y);
 }
 vec3 palette(float t) { return 0.5 + 0.5 * cos(TAU * (t + vec3(0.0, 0.33, 0.67))); }
+
+// The 16 bands, packed four to a vec4. `bandU` reads the spectrum as a curve
+// across 0..1 so a silhouette or a strip can be driven straight off it.
+float bandI(int i) {
+    i = clamp(i, 0, 15);
+    vec4 v = iBand[i >> 2];
+    int k = i & 3;
+    return k == 0 ? v.x : (k == 1 ? v.y : (k == 2 ? v.z : v.w));
+}
+float bandU(float u) {
+    float f = clamp(u, 0.0, 1.0) * 15.0;
+    int i = int(f);
+    return mix(bandI(i), bandI(i + 1), fract(f));
+}
+
 
 // Distance from a ground point to the circuit's centreline. The curve is
 // star-shaped in theta, so this is exact and costs three sines -- no track
@@ -128,7 +145,7 @@ void main() {
     float t = mod(iTime, 600.0);
     vec2 uv = v_uv;
     // A boost widens the view; the lean rolls it into the corner.
-    float fov = 1.0 + iBoost * 0.16;
+    float fov = 1.0 + iBoost * 0.16 + iPunch * 0.045;
     vec2 p0 = (uv - 0.5) * vec2(A, 1.0) * fov;
     // The lean rolls the world. The kart is bolted to the camera, so it is
     // drawn in p0 -- roll it too and it swings around the frame instead of
@@ -156,6 +173,14 @@ void main() {
         vec3 sunCol = mix(vec3(1.0, 0.88, 0.55), palette(iHue + 0.08), 0.35);
         col += sunCol * exp(-sd * 5.5) * (0.55 + iMid * 0.45);
         col = mix(col, sunCol, smoothstep(0.085, 0.062, sd));
+        // An aurora over the circuit, reading the spectrum left to right.
+        // The sky was the largest surface in the frame and moved with nothing.
+        float au = clamp(p.x / A + 0.5, 0.0, 1.0);
+        float spec = bandU(au);
+        float curt = smoothstep(0.0, 0.55 + spec * 0.85, p.y - horizon);
+        col += mix(palette(iHue + 0.22), vec3(1.0), 0.25)
+             * (1.0 - curt) * smoothstep(0.0, 0.05, p.y - horizon)
+             * (spec * 1.25 + iPunch * 0.30);
         // Clouds banded along the horizon, and distant hills under them.
         float band = sin(p.x * 3.1 + iCamHeading * 2.0) * 0.5 + 0.5;
         col = mix(col, vec3(1.0), smoothstep(0.55, 0.95, band) * (1.0 - up) * 0.35);
@@ -206,7 +231,9 @@ void main() {
             road = mix(road, vec3(0.95, 0.92, 0.55), centre * dash * 0.8);
             col = mix(col, road, smoothstep(7.0, 7.0 - 0.9, d));
             // Neon kerb light where the road meets the rumble.
-            col += neon * smoothstep(0.55, 0.0, abs(d - 7.0)) * (0.35 + iBass * 0.8);
+            float ku = clamp(p.x / A + 0.5, 0.0, 1.0);
+            col += neon * smoothstep(0.55, 0.0, abs(d - 7.0))
+                 * (0.28 + iBass * 1.3 + bandU(ku) * 1.5 + iPunch * 0.9);
             // Start/finish: two rows of checks laid across the lap origin,
             // sized in world units so the squares stay square.
             float sf = smoothstep(0.050, 0.040, abs(th));
@@ -219,6 +246,14 @@ void main() {
         // Speed streaks rushing under the kart.
         col += vec3(1.0) * step(0.997, hash21(floor(vec2(w.x * 2.0, w.y * 2.0 + t * 40.0))))
              * fade * iBoost * 0.5;
+        // Glitter coming up off the surface: round points inside their cells,
+        // never a bare threshold on the cell hash, which lights whole squares.
+        vec2 gc = vec2(w.x * 1.7, w.y * 1.7 + t * 9.0);
+        vec2 gf = fract(gc) - 0.5;
+        col += mix(vec3(1.0), neon, 0.35)
+             * step(0.962 - iPunch * 0.030, hash21(floor(gc)))
+             * smoothstep(0.34, 0.02, length(gf)) * fade
+             * (0.25 + iTreble * 1.6 + iPunch * 1.2) * iGlitter;
     }
 
     // ---- item boxes ----
@@ -233,7 +268,8 @@ void main() {
         float dia = abs(r.x) + abs(r.y) - 0.9;
         vec3 boxCol = palette(iHue + 0.15 + 0.25 * sin(sp));
         col = mix(col, boxCol, smoothstep(0.06, 0.0, dia) * 0.75);
-        col += boxCol * exp(-max(dia, 0.0) * 5.0) * (0.6 + iTreble * 0.9) * iGlitter;
+        col += boxCol * exp(-max(dia, 0.0) * 5.0)
+             * (0.5 + iTreble * 1.6 + iPunch * 1.2) * iGlitter;
         col += vec3(1.0) * smoothstep(0.22, 0.0, length(q)) * 0.5;
     }
 
@@ -305,7 +341,8 @@ void main() {
             for (int s = -1; s <= 1; s += 2) {
                 vec2 e = q - vec2(0.62 * float(s), -0.44);
                 col += mix(vec3(1.0, 0.66, 0.20), neon, 0.35)
-                     * exp(-dot(e, e) * 7.0) * (0.22 + iBoost * 2.0 + iBass * 0.45);
+                     * exp(-dot(e, e) * 7.0)
+                     * (0.20 + iBoost * 2.0 + iBass * 0.80 + iPunch * 1.3);
             }
         }
         // Drift sparks off the inside wheels, thrown by the lean.
@@ -320,12 +357,12 @@ void main() {
             if (q2 < 0.004) {
                 col += mix(vec3(1.0, 0.85, 0.35), neon, 0.3)
                      * exp(-q2 * 1400.0) * (1.0 - ph) * lean
-                     * (0.7 + iTreble * 1.1) * iGlitter;
+                     * (0.55 + iTreble * 1.9 + iPunch * 1.0) * iGlitter;
             }
         }
     }
 
-    col += neon * iBeat * 0.07;
+    col += neon * (iBeat * 0.07 + iPunch * 0.11);
     col *= smoothstep(1.25, 0.32, length((uv - 0.5) * vec2(A, 1.0)));
     col = col / (1.0 + col * 0.34);
     fragColor = vec4(pow(clamp(col, 0.0, 1.0), vec3(0.86)), 1.0);
@@ -349,7 +386,7 @@ class MarioKart(BaseEffect):
     def _init(self) -> None:
         self.parameters = {
             'speed': float(self.config.get('speed', 1.0)),
-            'reactivity': float(self.config.get('reactivity', 1.2)),
+            'reactivity': float(self.config.get('reactivity', 1.5)),
             'glitter': float(self.config.get('glitter', 1.0)),
         }
         self._prog = self._make_program(_VERT, _FRAG)
@@ -357,6 +394,12 @@ class MarioKart(BaseEffect):
 
         self._bass = self._mid = self._treble = 0.0
         self._beat = 0.0
+        self._punch = 0.0
+        self._band = np.zeros(16, dtype=np.float64)
+        # The spectrum falls away with frequency, so an untilted reading only
+        # ever moves at its left-hand end and half the strip looks dead.
+        self._band_tilt = np.linspace(1.0, 2.7, 16)
+        self._tbl_band = np.zeros((4, 4), dtype='f4')
         self._boost = 0.0
         self._hue = float(self.rng.uniform(0.0, 1.0))
         self._sky = float(self.rng.uniform(0.0, 1.0))
@@ -430,6 +473,19 @@ class MarioKart(BaseEffect):
         return (side / fwd, (_HORIZON - 0.5) - v, v)
 
     # ------------------------------------------------------------------ sim
+    def _pump_bands(self, audio: AudioData, dt: float) -> None:
+        """Fold the FFT down to 16 bands the shader can read as a curve."""
+        b = getattr(audio, 'bands', None)
+        if b is not None and len(b) >= 16:
+            edges = np.linspace(0, len(b), 17).astype(int)
+            tgt = np.array([float(np.mean(b[edges[i]:max(edges[i] + 1, edges[i + 1])]))
+                            for i in range(16)]) * self._band_tilt
+            self._band += (tgt - self._band) * min(1.0, dt * 14.0)
+        else:
+            self._band *= math.exp(-dt * 2.5)
+        np.clip(self._band, 0.0, 1.6, out=self._band)
+        self._tbl_band[:] = self._band.reshape(4, 4).astype('f4')
+
     def update(self, dt: float, audio: AudioData) -> None:
         """Drive the lap: steer toward the track ahead, lean into what that costs."""
         super().update(dt, audio)
@@ -437,10 +493,16 @@ class MarioKart(BaseEffect):
         self._bass = float(np.clip(audio.bass_n * react, 0.0, 1.8))
         self._mid = float(np.clip(audio.mid_n * react, 0.0, 1.8))
         self._treble = float(np.clip(audio.treble_n * react, 0.0, 1.8))
+        self._pump_bands(audio, dt)
         if audio.beat > 0.5:
             self._beat = 1.0
             self._boost = 1.0
+            self._punch = 1.0
         self._beat = max(0.0, self._beat - dt * 3.4)
+        # A second, much faster envelope. iBeat at 3.4/s is a ~300 ms swell,
+        # which reads as a pulse; a transient needs to be gone again before
+        # the next one lands.
+        self._punch = max(0.0, self._punch - dt * 11.0)
         self._boost = max(0.0, self._boost - dt * 1.6)
 
         throttle = max(0.05, float(self.parameters['speed']))
@@ -530,6 +592,8 @@ class MarioKart(BaseEffect):
         p['iMid'].value = self._mid
         p['iTreble'].value = self._treble
         p['iBeat'].value = self._beat
+        p['iPunch'].value = self._punch
+        p['iBand'].write(self._tbl_band.tobytes())
         p['iBoost'].value = self._boost
         p['iHue'].value = self._hue
         p['iGlitter'].value = self._glitter
