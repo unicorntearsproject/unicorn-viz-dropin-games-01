@@ -1,14 +1,39 @@
 # games-01 — Unicorn Viz effect pack
 
-**Version 0.15.0**
+**Version 0.16.0**
 
 
 arcade / game-like visuals: Breakout, Neon Pac, Galaga, Joust, Tetris,
-Missile Command, Donkey Kong, Q*bert, Super Mario, Mario Kart.
+Missile Command, Donkey Kong, Q*bert, Super Mario, Mario Kart, Frogger,
+Marble Madness.
 
 Each effect subclasses `unicornviz.effects.base.BaseEffect` and is auto-discovered.
 
 ## Changelog
+
+- **0.16.0** — Frogger and Marble Madness.
+
+  *Frogger.* The frog reads the traffic before it commits. The two halves of
+  the board turn out to ask opposite questions: on the road it stands still
+  while the cars move, so a tile has to stay clear for the hop *and* the dwell
+  after it; on the river it rides what it lands on, so only the landing
+  instant matters. Sweeping the river with the road's horizon looks for a log
+  0.8 s downstream of where the frog actually arrives, which accounted for
+  nine of eleven river deaths before it was separated out. Lane densities are
+  sized so a window is guaranteed to exist -- four long vehicles at speed make
+  a lane mathematically impassable, and the frog sat on row 2 for a full 90 s
+  run proving it. Measured: a crossing about every 60 s and a death about
+  every 28 s, spread across the board rather than piled on one row.
+
+  *Marble Madness.* An isometric chute rendered by walking a ray into a height
+  field, with the marble accelerated down that same field's gradient -- so
+  the banking steers it, because banking *is* a gradient. It rolls at 5/7 g
+  sin(theta), the solid-sphere figure, with the other two sevenths in the
+  spin; the spin is integrated as a rotation matrix so the banding stays glued
+  to the marble through a turn. Tracing costs 24 samples per pixel instead of
+  the naive ~85: the course is a tilted plane plus a correction bounded to
+  [-8, +9] world units, so the plane crossing is solved in closed form and
+  only that window is searched. 2.5 ms/frame at 1080p.
 
 - **0.15.0** — Two new effects, both real simulations rather than animations.
 
