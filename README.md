@@ -1,14 +1,36 @@
 # games-01 — Unicorn Viz effect pack
 
-**Version 0.14.0**
+**Version 0.15.0**
 
 
 arcade / game-like visuals: Breakout, Neon Pac, Galaga, Joust, Tetris,
-Missile Command, Donkey Kong, Q*bert.
+Missile Command, Donkey Kong, Q*bert, Super Mario, Mario Kart.
 
 Each effect subclasses `unicornviz.effects.base.BaseEffect` and is auto-discovered.
 
 ## Changelog
+
+- **0.15.0** — Two new effects, both real simulations rather than animations.
+
+  *Super Mario.* An auto-running platformer over a tile heightmap generated per
+  column on demand: gravity, coyote time, goomba stomps with a bounce, question
+  blocks that pop coins, pipes, staircase terraces and pits. The runner is
+  driven by the level, not scripted against it. The block hit is swept rather
+  than windowed — he rises 0.35 tiles per frame, so any fixed window narrower
+  than a frame's travel is a one-frame target and gets stepped straight over;
+  that single change took coins popped over a 60 s run from 0 to 10.
+
+  *Mario Kart.* Mode 7, with the circuit as an analytic closed curve
+  `R(theta)`. Both halves read that one function — the shader asks how far a
+  ground point is from the racing surface to decide road, rumble or grass, and
+  the simulation asks where the track goes next in order to steer — so there is
+  no second copy of the track to fall out of sync. Verified by round-trip: the
+  CPU projector inverts the shader's ground mapping to 0.0 world units of
+  error. The kart is driven, not placed: it carries speed, aims at a racing
+  line rather than the centreline, and the gap between where it points and
+  where it is going is what leans it into a corner and throws drift sparks off
+  the inside wheels. Rivals run the same model from their own positions, so a
+  corner bunches them up the way a corner does. 1.0 ms/frame at 1080p.
 
 - **0.14.0** — Donkey Kong: the hero jumps, moves at a watchable pace, and the
   board is different every time.
