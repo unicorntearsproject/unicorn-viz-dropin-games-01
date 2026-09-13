@@ -1,6 +1,6 @@
 # games-01 — Unicorn Viz effect pack
 
-**Version 0.17.0**
+**Version 0.18.0**
 
 
 arcade / game-like visuals: Breakout, Neon Pac, Galaga, Joust, Tetris,
@@ -10,6 +10,49 @@ Marble Madness.
 Each effect subclasses `unicornviz.effects.base.BaseEffect` and is auto-discovered.
 
 ## Changelog
+
+- **0.18.0** — Super Mario 2.0: enemies that read as creatures, six biomes,
+  and a pace you can watch.
+
+  *The enemies.* A goomba was one ellipse with eyes on it. It is now a
+  mushroom -- a flared cap over a narrower body with two feet that alternate,
+  a lighter face patch and a scowl -- because the silhouette is the whole
+  character. Two more kinds join it: a koopa troopa with a rimmed, scuted
+  shell and a head on a neck, which leaves its shell behind when stomped, and
+  a piranha plant that lives in a pipe, rises on its own cycle and refuses to
+  come up while the runner is standing over it, which is the rule that keeps
+  the pipes crossable.
+
+  *The pace.* `_RUN` 7.0 with a 0.8-1.35 tempo band ran him at up to 9.5
+  tiles/s -- most of the visible width every two seconds, too fast to read the
+  level. Now 4.9 over a 0.86-1.2 band: about 6.0 tiles/s.
+
+  *The diversity.* The level crosses one of six biomes every ninety tiles and
+  crossfades over the last nine, so the palette never sits still longer than
+  it is on screen: overworld, sunset, night, snow, underground and desert,
+  each with its own sky, hills, soil, grass and weather (stars, snowfall, or
+  neither). Shrubs stand on the grass line and a flagpole marks each biome
+  boundary. Three bugs found on the way: the vignette put the corners at 0.3%
+  brightness and the side edges at 11%, which read as murk rather than as a
+  vignette; the palette tint was a flat mix toward a saturated colour, which
+  swamped the dark biomes outright (underground came out a sheet of red); and
+  the star field used a cell four times wider than tall, so a round dot in
+  cell space drew as a wide lozenge and the stars read as floating pills.
+
+  *Reactivity and sparkle.* Blocks burn at the band their own column sits in.
+  Event sparks -- a stomp, a block opening, a landing, a beat taken on the
+  ground -- are thrown by things that happen rather than emitted on a timer,
+  so the sparkle lands on the frames the music does. Landing dust scales with
+  how hard he came down.
+
+  *And the jump targeting.* Deciding to jump at a block used a fixed 0.8-2.4
+  tile window, but the right lead is a physics quantity: his head must rise
+  `h`, which takes `(v - sqrt(v^2 - 2gh))/g`, and in that time he covers
+  `run * t`. Both `v` and `run` move with the audio, so the true lead ranges
+  from half a tile to two and a fixed window catches it only at one end.
+  Measured over three minutes: 7 blocks opened before, 28-38 after.
+
+  3.23 ms/frame at 1080p. Reacting pixels 87-97%.
 
 - **0.17.0** — Audio uplift across the four new effects: Super Mario, Mario
   Kart, Frogger and Marble Madness.

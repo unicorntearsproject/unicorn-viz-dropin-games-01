@@ -38,7 +38,7 @@ import numpy as np
 
 from unicornviz.effects.base import AudioData, BaseEffect
 
-__version__ = '0.17.0'
+__version__ = '0.18.0'
 
 _ROWS = 13              # 0 bank, 1-5 road, 6 median, 7-11 river, 12 homes
 _ROAD_LO, _ROAD_HI = 1, 5

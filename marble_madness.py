@@ -41,7 +41,7 @@ import numpy as np
 
 from unicornviz.effects.base import AudioData, BaseEffect
 
-__version__ = '0.17.0'
+__version__ = '0.18.0'
 
 _SLOPE = 0.22           # how steeply the chute descends along +x
 _HALF = 13.0            # chute half-width before the edge gives way

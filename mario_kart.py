@@ -41,7 +41,7 @@ import numpy as np
 
 from unicornviz.effects.base import AudioData, BaseEffect
 
-__version__ = '0.17.0'
+__version__ = '0.18.0'
 
 _NRIVAL = 6
 _NBOX = 8
